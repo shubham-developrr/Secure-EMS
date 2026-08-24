@@ -766,6 +766,20 @@ export default class ExamDashboard extends React.Component {
     }
   };
 
+  getPaperDataUrl = (subjectCode) => {
+    const code = (subjectCode || '').toUpperCase().trim();
+    try {
+      const customPapers = JSON.parse(localStorage.getItem('CUSTOM_PAPERS') || '{}');
+      const paperObj = customPapers[code];
+      if (paperObj && typeof paperObj === 'object' && paperObj.dataUrl) {
+        return paperObj.dataUrl;
+      }
+    } catch (e) {
+      console.error('Failed to read paper dataUrl from localStorage', e);
+    }
+    return '';
+  };
+
   getCleanPaperContent = (rawContent, subjectCode) => {
     if (!rawContent || typeof rawContent !== 'string') {
       return this.getFallbackPaperText(subjectCode);
@@ -1930,6 +1944,21 @@ export default class ExamDashboard extends React.Component {
                             1. Scroll to read all question sections. 2. Standalone kiosk mode active; output printing and clipboard capture are disabled.
                           </p>
                         </div>
+
+                        {/* Visual Uploaded PDF Document Stream */}
+                        {this.getPaperDataUrl(studentSubjectCode) && (
+                          <div className="border-2 border-slate-300 rounded-lg overflow-hidden bg-slate-100 p-2 shadow-inner my-4">
+                            <div className="bg-slate-900 text-slate-200 text-xs font-mono px-3 py-1.5 flex items-center justify-between rounded-t">
+                              <span>📄 UPLOADED PDF DOCUMENT VISUAL IMAGE STREAM</span>
+                              <span className="text-emerald-400 font-bold">● LIVE VERIFIED PDF VIEW</span>
+                            </div>
+                            <iframe
+                              src={this.getPaperDataUrl(studentSubjectCode)}
+                              title="Uploaded PDF Document Image Stream"
+                              className="w-full h-[650px] border-0 rounded-b bg-white"
+                            />
+                          </div>
+                        )}
 
                         {/* Question Paper Content Section */}
                         <div className="space-y-4 pt-2">

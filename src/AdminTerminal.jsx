@@ -98,6 +98,14 @@ export default class AdminTerminal extends React.Component {
         }
       }
 
+      // Read PDF as Data URL stream for visual document rendering
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const pdfDataUrl = evt.target ? evt.target.result : '';
+        this.setState({ pdfDataUrl });
+      };
+      reader.readAsDataURL(file);
+
       this.setState({
         pdfFile: file,
         pdfFileName: file.name,
@@ -253,7 +261,11 @@ export default class AdminTerminal extends React.Component {
 
         try {
           const customPapers = JSON.parse(localStorage.getItem('CUSTOM_PAPERS') || '{}');
-          customPapers[subj] = newPaperText;
+          customPapers[subj] = {
+            text: newPaperText,
+            dataUrl: this.state.pdfDataUrl || '',
+            fileName: this.state.pdfFileName || `${subj}_Question_Paper.pdf`
+          };
           localStorage.setItem('CUSTOM_PAPERS', JSON.stringify(customPapers));
         } catch (e) {
           console.error('Failed to persist custom paper in localStorage', e);
