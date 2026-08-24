@@ -234,6 +234,15 @@ export default class StudentTerminal extends React.Component {
 
   getFallbackPaperText = (subjectCode) => {
     const code = (subjectCode || '').toUpperCase().trim();
+    try {
+      const customPapers = JSON.parse(localStorage.getItem('CUSTOM_PAPERS') || '{}');
+      if (customPapers[code]) {
+        return customPapers[code];
+      }
+    } catch (e) {
+      console.error('Failed to read CUSTOM_PAPERS from localStorage', e);
+    }
+
     if (code.includes('CS-602')) {
       return `CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: Computer Science - Database Systems & Security (CS-602)\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Explain the architecture of FastAPI and asynchronous request handling.\nQ2. Discuss database indexing strategies for high-concurrency systems.\nQ3. Describe the implementation of time-locked cryptographic decryption.`;
     }
@@ -246,7 +255,7 @@ export default class StudentTerminal extends React.Component {
     if (code.includes('MATH-801')) {
       return `CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: Applied Mathematics (MATH-801)\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Formulate and solve a system of non-linear differential equations.\nQ2. Derive the Runge-Kutta 4th order numerical method.\nQ3. Apply Fourier transforms to solve boundary value problems.`;
     }
-    return `CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: Mathematics (MATH-201)\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Evaluate the definite integral of sin^2(x) from 0 to pi.\nQ2. Solve the linear differential equation dy/dx + P(x)y = Q(x).\nQ3. State and prove Cayley-Hamilton Theorem.`;
+    return `CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: ${code || 'Mathematics (MATH-201)'}\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Evaluate the definite integral of sin^2(x) from 0 to pi.\nQ2. Solve the linear differential equation dy/dx + P(x)y = Q(x).\nQ3. State and prove Cayley-Hamilton Theorem.`;
   };
 
   render() {

@@ -251,6 +251,14 @@ export default class AdminTerminal extends React.Component {
           created_at: new Date().toLocaleString(),
         };
 
+        try {
+          const customPapers = JSON.parse(localStorage.getItem('CUSTOM_PAPERS') || '{}');
+          customPapers[subj] = newPaperText;
+          localStorage.setItem('CUSTOM_PAPERS', JSON.stringify(customPapers));
+        } catch (e) {
+          console.error('Failed to persist custom paper in localStorage', e);
+        }
+
         this.setState((prev) => ({
           registeredPapers: [newPaperRecord, ...prev.registeredPapers.filter((p) => p.subject_code !== subj)],
         }));
