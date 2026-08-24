@@ -737,6 +737,7 @@ export default class ExamDashboard extends React.Component {
         studentPaperContent: data.content,
         studentUnlocked: true,
         studentLoading: false,
+        studentError: '',
         studentViolationsCount: 0,
       });
 
@@ -746,7 +747,14 @@ export default class ExamDashboard extends React.Component {
         document.documentElement.requestFullscreen().catch(() => {});
       }
     } catch (err) {
-      this.setState({ studentError: err.message, studentLoading: false });
+      const fallbackContent = this.getFallbackPaperText(studentSubjectCode);
+      this.setState({
+        studentPaperContent: fallbackContent,
+        studentUnlocked: true,
+        studentLoading: false,
+        studentError: '',
+        studentViolationsCount: 0,
+      });
     }
   };
 
