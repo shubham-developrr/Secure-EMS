@@ -27,3 +27,12 @@ dist-ssr
 __pycache__/
 *.pyc
 
+# Databases & Encrypted Test Files
+*.db
+*.enc
+
+# PDF Reports & Local Scripts (Never publish to GitHub)
+*.pdf
+generate_blockchain_plan_pdf.py
+
+

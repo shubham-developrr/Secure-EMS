@@ -1,30 +1,94 @@
 import os
 import sqlite3
 import hashlib
+import base64
 from typing import Optional
 from datetime import datetime, timedelta
+
+class CustomFernet:
+    def __init__(self, key):
+        self.key = key if isinstance(key, bytes) else key.encode('utf-8')
+
+    @staticmethod
+    def generate_key():
+        return base64.urlsafe_b64encode(os.urandom(32))
+
+    def encrypt(self, data: bytes) -> bytes:
+        k = hashlib.sha256(self.key).digest()
+        xored = bytes(b ^ k[i % len(k)] for i, b in enumerate(data))
+        return base64.urlsafe_b64encode(xored)
+
+    def decrypt(self, token: bytes) -> bytes:
+        raw = base64.urlsafe_b64decode(token)
+        k = hashlib.sha256(self.key).digest()
+        return bytes(b ^ k[i % len(k)] for i, b in enumerate(raw))
+
 try:
     from cryptography.fernet import Fernet
 except ImportError:
-    import base64
+    Fernet = CustomFernet
 
-    class Fernet:
-        def __init__(self, key):
-            self.key = key if isinstance(key, bytes) else key.encode('utf-8')
+def is_readable_text(text: str) -> bool:
+    if not text or len(text.strip()) == 0:
+        return False
+    printable_count = sum(1 for c in text if c.isprintable() or c in '\n\r\t')
+    ratio = printable_count / len(text)
+    has_spaces_or_newlines = ' ' in text or '\n' in text
+    return ratio > 0.85 and (has_spaces_or_newlines or len(text) < 40)
 
-        @staticmethod
-        def generate_key():
-            return base64.urlsafe_b64encode(os.urandom(32))
+def decrypt_question_paper(encrypted_data: bytes, sup_key: str, adm_key: str) -> str:
+    fernet_classes = [CustomFernet]
+    try:
+        from cryptography.fernet import Fernet as CryptoFernet
+        fernet_classes.append(CryptoFernet)
+    except ImportError:
+        pass
 
-        def encrypt(self, data: bytes) -> bytes:
-            k = hashlib.sha256(self.key).digest()
-            xored = bytes(b ^ k[i % len(k)] for i, b in enumerate(data))
-            return base64.urlsafe_b64encode(xored)
+    # Try Supervisor Key first
+    for FernetClass in fernet_classes:
+        try:
+            f_sup = FernetClass(sup_key.encode('utf-8') if isinstance(sup_key, str) else sup_key)
+            s1_bytes = f_sup.decrypt(encrypted_data)
+            s1_text = s1_bytes.decode('utf-8', errors='ignore')
 
-        def decrypt(self, token: bytes) -> bytes:
-            raw = base64.urlsafe_b64decode(token)
-            k = hashlib.sha256(self.key).digest()
-            return bytes(b ^ k[i % len(k)] for i, b in enumerate(raw))
+            if is_readable_text(s1_text):
+                return s1_text
+
+            for FernetClass2 in fernet_classes:
+                try:
+                    f_adm = FernetClass2(adm_key.encode('utf-8') if isinstance(adm_key, str) else adm_key)
+                    s2_bytes = f_adm.decrypt(s1_bytes)
+                    s2_text = s2_bytes.decode('utf-8', errors='ignore')
+                    if is_readable_text(s2_text):
+                        return s2_text
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+    # Try Admin Key first
+    for FernetClass in fernet_classes:
+        try:
+            f_adm = FernetClass(adm_key.encode('utf-8') if isinstance(adm_key, str) else adm_key)
+            s1_bytes = f_adm.decrypt(encrypted_data)
+            s1_text = s1_bytes.decode('utf-8', errors='ignore')
+
+            if is_readable_text(s1_text):
+                return s1_text
+
+            for FernetClass2 in fernet_classes:
+                try:
+                    f_sup = FernetClass2(sup_key.encode('utf-8') if isinstance(sup_key, str) else sup_key)
+                    s2_bytes = f_sup.decrypt(s1_bytes)
+                    s2_text = s2_bytes.decode('utf-8', errors='ignore')
+                    if is_readable_text(s2_text):
+                        return s2_text
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+    raise ValueError("Cryptographic decryption failed: unable to decrypt question paper with provided keys.")
 
 try:
     from fastapi import FastAPI, HTTPException, Request, status
@@ -333,13 +397,7 @@ def decrypt_paper(payload: DecryptRequest, request: Request):
         with open(file_path, "rb") as f:
             encrypted_data = f.read()
 
-        # Decrypt Stage 1 (Outer Supervisor Lock)
-        cipher_sup = Fernet(sup_key.encode('utf-8'))
-        stage1_decrypted = cipher_sup.decrypt(encrypted_data)
-
-        # Decrypt Stage 2 (Inner Admin Controller Lock)
-        cipher_adm = Fernet(adm_key.encode('utf-8'))
-        final_paper_text = cipher_adm.decrypt(stage1_decrypted).decode('utf-8')
+        final_paper_text = decrypt_question_paper(encrypted_data, sup_key, adm_key)
 
         log_audit_event(
             user_id=user_id,
@@ -447,10 +505,7 @@ def fetch_student_paper(payload: StudentPaperRequest, request: Request):
     with open(file_path, "rb") as f:
         encrypted_data = f.read()
 
-    f_sup = Fernet(sup_key.encode('utf-8') if isinstance(sup_key, str) else sup_key)
-    stage1_decrypted = f_sup.decrypt(encrypted_data)
-    f_adm = Fernet(adm_key.encode('utf-8') if isinstance(adm_key, str) else adm_key)
-    final_decrypted_text = f_adm.decrypt(stage1_decrypted).decode('utf-8')
+    final_decrypted_text = decrypt_question_paper(encrypted_data, sup_key, adm_key)
 
     log_audit_event(
         center_id=center_id,
