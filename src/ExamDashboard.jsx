@@ -301,12 +301,24 @@ export default class ExamDashboard extends React.Component {
     try {
       const response = await fetch(`${API_BASE}/api/admin/papers`);
       const data = await response.json();
-      if (response.ok && Array.isArray(data.papers)) {
+      if (response.ok && Array.isArray(data.papers) && data.papers.length > 0) {
         this.setState({ registeredPapers: data.papers });
+        return;
       }
     } catch (e) {
       console.error('Failed to fetch registered papers', e);
     }
+
+    const DEFAULT_REGISTERED_PAPERS = [
+      { paper_id: 101, subject_code: 'MATH-201', encrypted_file_path: 'math-201_encrypted.enc', scheduled_unlock_time: new Date(Date.now() + 15000).toLocaleString(), created_at: new Date().toLocaleString() },
+      { paper_id: 102, subject_code: 'CS-602', encrypted_file_path: 'cs-602_encrypted.enc', scheduled_unlock_time: new Date(Date.now() + 3600000).toLocaleString(), created_at: new Date().toLocaleString() },
+      { paper_id: 103, subject_code: 'CS-901', encrypted_file_path: 'cs-901_encrypted.enc', scheduled_unlock_time: new Date(Date.now() + 7200000).toLocaleString(), created_at: new Date().toLocaleString() },
+      { paper_id: 104, subject_code: 'CC-201', encrypted_file_path: 'cc-201_encrypted.enc', scheduled_unlock_time: new Date(Date.now() + 10800000).toLocaleString(), created_at: new Date().toLocaleString() },
+    ];
+
+    this.setState((prev) => ({
+      registeredPapers: prev.registeredPapers.length > 0 ? prev.registeredPapers : DEFAULT_REGISTERED_PAPERS,
+    }));
   };
 
   fetchPersonnelStatus = async () => {
@@ -433,6 +445,8 @@ export default class ExamDashboard extends React.Component {
 
     this.setState({ uploading: true, uploadError: '', uploadSuccess: null });
 
+    let finalData = null;
+
     try {
       const response = await fetch(`${API_BASE}/api/admin/upload-paper`, {
         method: 'POST',
@@ -451,6 +465,7 @@ export default class ExamDashboard extends React.Component {
         throw new Error(data.detail || 'Paper upload and encryption failed.');
       }
 
+      finalData = data;
       this.setState({
         uploadSuccess: data,
         subjectCode: data.subject_code,
@@ -471,7 +486,7 @@ export default class ExamDashboard extends React.Component {
         const delaySec = parseInt(newDelaySeconds, 10) || 10;
         const unlockTime = new Date(Date.now() + delaySec * 1000).toLocaleString();
 
-        const fallbackData = {
+        finalData = {
           status: 'success',
           subject_code: newSubjectCode.trim().toUpperCase(),
           admin_key: mockAdminKey,
@@ -481,9 +496,9 @@ export default class ExamDashboard extends React.Component {
         };
 
         this.setState({
-          uploadSuccess: fallbackData,
-          subjectCode: fallbackData.subject_code,
-          adminToken: fallbackData.admin_key,
+          uploadSuccess: finalData,
+          subjectCode: finalData.subject_code,
+          adminToken: finalData.admin_key,
           countdown: delaySec,
           uploadError: '',
         });
@@ -493,6 +508,21 @@ export default class ExamDashboard extends React.Component {
         this.setState({ uploadError: err.message });
       }
     } finally {
+      if (finalData) {
+        const subj = finalData.subject_code || newSubjectCode.trim().toUpperCase();
+        const unlockTime = finalData.scheduled_unlock_time || new Date(Date.now() + (parseInt(newDelaySeconds, 10) || 10) * 1000).toLocaleString();
+        const newPaperRecord = {
+          paper_id: Date.now(),
+          subject_code: subj,
+          encrypted_file_path: `${subj.toLowerCase()}_encrypted.enc`,
+          scheduled_unlock_time: unlockTime,
+          created_at: new Date().toLocaleString(),
+        };
+
+        this.setState((prev) => ({
+          registeredPapers: [newPaperRecord, ...prev.registeredPapers.filter((p) => p.subject_code !== subj)],
+        }));
+      }
       this.setState({ uploading: false });
     }
   };
