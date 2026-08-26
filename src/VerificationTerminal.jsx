@@ -1,6 +1,6 @@
 import React from 'react';
 
-const API_BASE = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1' ? '' : 'http://localhost:8000');
+const API_BASE = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1' ? '' : 'http://127.0.0.1:8000');
 
 export default class VerificationTerminal extends React.Component {
   constructor(props) {
@@ -190,6 +190,14 @@ export default class VerificationTerminal extends React.Component {
       }
 
       const data = await response.json();
+      if (capturedImage || data.captured_image_base64) {
+        try {
+          const imgToSave = capturedImage || data.captured_image_base64;
+          localStorage.setItem(`STUDENT_VERIFICATION_${rollNumber.trim().toUpperCase()}`, imgToSave);
+        } catch (e) {
+          console.warn('Could not cache verification image in localStorage', e);
+        }
+      }
       this.setState({ verificationResult: data, verifying: false });
     } catch (err) {
       this.setState({ errorMessage: err.message, verifying: false });

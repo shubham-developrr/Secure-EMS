@@ -1,6 +1,72 @@
 import React from 'react';
+import PdfCanvasViewer from './PdfCanvasViewer.jsx';
+import ImagePaperViewer from './ImagePaperViewer.jsx';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1' ? '' : 'http://127.0.0.1:8000');
+
+const ensurePdfBlobUrl = (content) => {
+  if (!content || typeof content !== 'string') return '';
+  const trimmed = content.trim();
+
+  if (trimmed.startsWith('blob:')) {
+    return trimmed;
+  }
+
+  let base64Data = '';
+
+  if (trimmed.includes('base64,')) {
+    base64Data = trimmed.split('base64,')[1];
+  } else if (trimmed.startsWith('data:image/')) {
+    return trimmed;
+  } else if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed.dataUrl) return ensurePdfBlobUrl(parsed.dataUrl);
+    } catch (e) {}
+  } else if (trimmed.startsWith('JVBERi')) {
+    base64Data = trimmed;
+  } else if (
+    trimmed.includes('%PDF') ||
+    trimmed.includes('\uFFFD') ||
+    trimmed.includes('µp s@%H') ||
+    /[\x00-\x08\x0E-\x1F]/.test(trimmed)
+  ) {
+    try {
+      const pdfStartIndex = trimmed.indexOf('%PDF');
+      const cleanContent = pdfStartIndex !== -1 ? trimmed.slice(pdfStartIndex) : trimmed;
+      const bytes = new Uint8Array(cleanContent.length);
+      for (let i = 0; i < cleanContent.length; i++) {
+        bytes[i] = cleanContent.charCodeAt(i) & 0xff;
+      }
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+        return URL.createObjectURL(blob);
+      }
+    } catch (e) {
+      console.error('Failed to create Blob from binary string', e);
+    }
+  }
+
+  if (base64Data) {
+    try {
+      const cleanB64 = base64Data.replace(/\s/g, '');
+      const binaryString = typeof atob !== 'undefined' ? atob(cleanB64) : '';
+      const len = binaryString.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+        return URL.createObjectURL(blob);
+      }
+    } catch (e) {
+      console.error('Failed to convert base64 to Blob URL', e);
+    }
+  }
+
+  return '';
+};
 
 export default class StudentTerminal extends React.Component {
   constructor(props) {
@@ -10,7 +76,7 @@ export default class StudentTerminal extends React.Component {
       studentRoll: '2026-CS-101',
       studentSeat: 'DESK-42',
       studentCenterCode: 'CTR-101',
-      studentSubjectCode: 'CS-602',
+      studentSubjectCode: '',
       studentPaperContent: '',
       studentPhotoUrl: null,
       studentUnlocked: false,
@@ -26,20 +92,48 @@ export default class StudentTerminal extends React.Component {
   }
 
   componentDidMount() {
+    this.fetchStudentPhoto(this.state.studentRoll);
     window.addEventListener('keydown', this.handleStudentKeyDown);
     window.addEventListener('blur', this.handleStudentFocusLoss);
-    window.addEventListener('visibilitychange', this.handleStudentVisibilityChange);
+    document.addEventListener('visibilitychange', this.handleStudentVisibilityChange);
     window.addEventListener('contextmenu', this.preventStudentContextMenu);
     window.addEventListener('copy', this.preventStudentClipboard);
     window.addEventListener('cut', this.preventStudentClipboard);
     window.addEventListener('paste', this.preventStudentClipboard);
   }
 
+  fetchStudentPhoto = async (roll) => {
+    const cleanRoll = (roll || this.state.studentRoll || '').trim().toUpperCase();
+    if (!cleanRoll) return;
+
+    try {
+      const cached = localStorage.getItem(`STUDENT_VERIFICATION_${cleanRoll}`);
+      if (cached) {
+        this.setState({ studentPhotoUrl: cached });
+      }
+    } catch (e) {}
+
+    try {
+      const res = await fetch(`${API_BASE}/api/student/verification/${encodeURIComponent(cleanRoll)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.verified && data.captured_image_base64) {
+          this.setState({ studentPhotoUrl: data.captured_image_base64 });
+          try {
+            localStorage.setItem(`STUDENT_VERIFICATION_${cleanRoll}`, data.captured_image_base64);
+          } catch (e) {}
+        }
+      }
+    } catch (e) {
+      console.warn('Could not fetch student verification photo', e);
+    }
+  };
+
   componentWillUnmount() {
     this.stopHeartbeat();
     window.removeEventListener('keydown', this.handleStudentKeyDown);
     window.removeEventListener('blur', this.handleStudentFocusLoss);
-    window.removeEventListener('visibilitychange', this.handleStudentVisibilityChange);
+    document.removeEventListener('visibilitychange', this.handleStudentVisibilityChange);
     window.removeEventListener('contextmenu', this.preventStudentContextMenu);
     window.removeEventListener('copy', this.preventStudentClipboard);
     window.removeEventListener('cut', this.preventStudentClipboard);
@@ -184,11 +278,15 @@ export default class StudentTerminal extends React.Component {
 
       this.setState({
         studentPaperContent: data.content,
+        studentPhotoUrl: data.captured_image_base64 || this.state.studentPhotoUrl,
         studentUnlocked: true,
         studentLoading: false,
         studentError: '',
         studentViolationsCount: 0,
       }, () => {
+        if (!data.captured_image_base64) {
+          this.fetchStudentPhoto(studentRoll);
+        }
         this.startHeartbeat();
       });
 
@@ -196,15 +294,12 @@ export default class StudentTerminal extends React.Component {
         document.documentElement.requestFullscreen().catch(() => {});
       }
     } catch (err) {
-      const fallbackContent = this.getFallbackPaperText(studentSubjectCode);
       this.setState({
-        studentPaperContent: fallbackContent,
-        studentUnlocked: true,
+        studentPaperContent: '',
+        studentUnlocked: false,
         studentLoading: false,
-        studentError: '',
+        studentError: err.message || 'Failed to fetch scheduled question paper.',
         studentViolationsCount: 0,
-      }, () => {
-        this.startHeartbeat();
       });
     }
   };
@@ -219,31 +314,96 @@ export default class StudentTerminal extends React.Component {
     }
   };
 
-  getCleanPaperContent = (rawContent, subjectCode) => {
+  getPaperDetails = (rawContent, subjectCode) => {
+    let dataUrl = ensurePdfBlobUrl(rawContent);
+    let text = '';
+    let pages = null;
+
+    if (typeof rawContent === 'string' && rawContent.trim()) {
+      const trimmed = rawContent.trim();
+      if (trimmed.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed.dataUrl) dataUrl = ensurePdfBlobUrl(parsed.dataUrl) || parsed.dataUrl;
+          if (parsed.pages && Array.isArray(parsed.pages)) {
+            pages = parsed.pages;
+          }
+          if (parsed.text) {
+            if (typeof parsed.text === 'string' && parsed.text.trim().startsWith('{')) {
+              try {
+                const innerParsed = JSON.parse(parsed.text.trim());
+                if (innerParsed.pages && Array.isArray(innerParsed.pages)) pages = innerParsed.pages;
+              } catch (e) {
+                text = parsed.text;
+              }
+            } else {
+              text = parsed.text;
+            }
+          }
+        } catch (e) {
+          text = rawContent;
+        }
+      } else if (!dataUrl) {
+        text = rawContent;
+      }
+    }
+
+    if (!dataUrl && (!pages || pages.length === 0)) {
+      try {
+        const customPapers = JSON.parse(localStorage.getItem('CUSTOM_PAPERS') || '{}');
+        const code = (subjectCode || '').toUpperCase().trim();
+
+        let paperObj = customPapers[code];
+        if (!paperObj) {
+          const matchingKey = Object.keys(customPapers).find((k) => k.toUpperCase().trim() === code);
+          if (matchingKey) paperObj = customPapers[matchingKey];
+        }
+        if (!paperObj && Object.keys(customPapers).length > 0) {
+          const keys = Object.keys(customPapers);
+          paperObj = customPapers[keys[keys.length - 1]];
+        }
+        if (!paperObj) {
+          const lastUploaded = localStorage.getItem('LAST_UPLOADED_PAPER');
+          if (lastUploaded) paperObj = JSON.parse(lastUploaded);
+        }
+
+        if (paperObj && typeof paperObj === 'object') {
+          if (paperObj.pages && Array.isArray(paperObj.pages)) pages = paperObj.pages;
+          if (paperObj.dataUrl) dataUrl = ensurePdfBlobUrl(paperObj.dataUrl) || paperObj.dataUrl;
+          if (!text && paperObj.text) {
+            if (typeof paperObj.text === 'string' && paperObj.text.trim().startsWith('{')) {
+              try {
+                const p = JSON.parse(paperObj.text.trim());
+                if (p.pages && Array.isArray(p.pages)) pages = p.pages;
+              } catch (e) {}
+            } else {
+              text = paperObj.text;
+            }
+          }
+        } else if (typeof paperObj === 'string') {
+          dataUrl = ensurePdfBlobUrl(paperObj);
+          if (!dataUrl && !text) text = paperObj;
+        }
+      } catch (e) {}
+    }
+
+    if (pages && pages.length > 0) {
+      text = '';
+    }
+
+    return { dataUrl, text, pages };
+  };
+
+  getCleanPaperContent = (rawContent) => {
     if (!rawContent || typeof rawContent !== 'string') {
-      return this.getFallbackPaperText(subjectCode);
+      return '';
     }
-
-    const nonPrintableCount = (rawContent.match(/[^\x09\x0A\x0D\x20-\x7E]/g) || []).length;
-    if (nonPrintableCount > 3 || rawContent.includes('\uFFFD') || rawContent.includes('µp s@%H')) {
-      return this.getFallbackPaperText(subjectCode);
-    }
-
     return rawContent;
   };
 
   getPaperDataUrl = (subjectCode) => {
-    const code = (subjectCode || '').toUpperCase().trim();
-    try {
-      const customPapers = JSON.parse(localStorage.getItem('CUSTOM_PAPERS') || '{}');
-      const paperObj = customPapers[code];
-      if (paperObj && typeof paperObj === 'object' && paperObj.dataUrl) {
-        return paperObj.dataUrl;
-      }
-    } catch (e) {
-      console.error('Failed to read paper dataUrl from localStorage', e);
-    }
-    return '';
+    const { dataUrl } = this.getPaperDetails(this.state.studentPaperContent, subjectCode);
+    return dataUrl;
   };
 
   getFallbackPaperText = (subjectCode) => {
@@ -252,25 +412,12 @@ export default class StudentTerminal extends React.Component {
       const customPapers = JSON.parse(localStorage.getItem('CUSTOM_PAPERS') || '{}');
       const paperObj = customPapers[code];
       if (paperObj) {
-        return typeof paperObj === 'string' ? paperObj : paperObj.text;
+        return typeof paperObj === 'string' ? paperObj : paperObj.text || '';
       }
     } catch (e) {
       console.error('Failed to read CUSTOM_PAPERS from localStorage', e);
     }
-
-    if (code.includes('CS-602')) {
-      return `CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: Computer Science - Database Systems & Security (CS-602)\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Explain the architecture of FastAPI and asynchronous request handling.\nQ2. Discuss database indexing strategies for high-concurrency systems.\nQ3. Describe the implementation of time-locked cryptographic decryption.`;
-    }
-    if (code.includes('CS-901')) {
-      return `CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: Advanced Computer Science (CS-901)\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Analyze the time complexity of parallel graph algorithms.\nQ2. Design a fault-tolerant distributed consensus protocol.\nQ3. Explain zero-knowledge proofs and public-key cryptography.`;
-    }
-    if (code.includes('CC-201')) {
-      return `CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: Cloud Computing (CC-201)\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Differentiate between IaaS, PaaS, and SaaS architectural models.\nQ2. Explain containerization using Docker and Kubernetes orchestration.\nQ3. Discuss cloud data encryption and key management standards.`;
-    }
-    if (code.includes('MATH-801')) {
-      return `CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: Applied Mathematics (MATH-801)\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Formulate and solve a system of non-linear differential equations.\nQ2. Derive the Runge-Kutta 4th order numerical method.\nQ3. Apply Fourier transforms to solve boundary value problems.`;
-    }
-    return `CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: ${code || 'Mathematics (MATH-201)'}\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Evaluate the definite integral of sin^2(x) from 0 to pi.\nQ2. Solve the linear differential equation dy/dx + P(x)y = Q(x).\nQ3. State and prove Cayley-Hamilton Theorem.`;
+    return '';
   };
 
   render() {
@@ -363,7 +510,12 @@ export default class StudentTerminal extends React.Component {
                     <input
                       type="text"
                       value={studentRoll}
-                      onChange={(e) => this.setState({ studentRoll: e.target.value })}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        this.setState({ studentRoll: val });
+                        this.fetchStudentPhoto(val);
+                      }}
+                      onBlur={() => this.fetchStudentPhoto(this.state.studentRoll)}
                       className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-slate-100 font-bold focus:outline-none focus:border-emerald-500"
                       placeholder="e.g. 2026-CS-101"
                       required
@@ -426,18 +578,30 @@ export default class StudentTerminal extends React.Component {
               <div className="space-y-6">
                 {/* Top Kiosk Header */}
                 <div className="bg-slate-950 border border-emerald-700 p-4 rounded-lg flex flex-wrap items-center justify-between gap-4 font-mono text-xs select-none">
-                  <div>
-                    <span className="text-emerald-400 font-bold uppercase tracking-wider block">
-                      🔴 SECURE STUDENT KIOSK READER — ACTIVE
-                    </span>
-                    <div className="flex items-center gap-3 text-slate-300 mt-1">
-                      <span>ROLL: <strong>{studentRoll}</strong></span>
-                      <span>|</span>
-                      <span>SEAT: <strong>{studentSeat}</strong></span>
-                      <span>|</span>
-                      <span>CENTER: <strong>{studentCenterCode}</strong></span>
-                      <span>|</span>
-                      <span>SUBJECT: <strong className="text-amber-400">{studentSubjectCode}</strong></span>
+                  <div className="flex items-center gap-4">
+                    {studentPhotoUrl && (
+                      <div className="relative w-10 h-14 bg-slate-900 border border-emerald-500 rounded overflow-hidden shrink-0 shadow" title="Pre-Exam Verified Candidate Photo">
+                        <img src={studentPhotoUrl} alt="Candidate Verified" className="w-full h-full object-cover" />
+                      </div>
+                    )}
+                    <div>
+                      <span className="text-emerald-400 font-bold uppercase tracking-wider block flex items-center gap-2">
+                        🔴 SECURE STUDENT KIOSK READER — ACTIVE
+                        {studentPhotoUrl && (
+                          <span className="bg-emerald-950 text-emerald-300 border border-emerald-800 text-[9px] px-1.5 py-0.5 rounded font-bold">
+                            ✓ VERIFIED PHOTO
+                          </span>
+                        )}
+                      </span>
+                      <div className="flex items-center gap-3 text-slate-300 mt-1">
+                        <span>ROLL: <strong>{studentRoll}</strong></span>
+                        <span>|</span>
+                        <span>SEAT: <strong>{studentSeat}</strong></span>
+                        <span>|</span>
+                        <span>CENTER: <strong>{studentCenterCode}</strong></span>
+                        <span>|</span>
+                        <span>SUBJECT: <strong className="text-amber-400">{studentSubjectCode}</strong></span>
+                      </div>
                     </div>
                   </div>
 
@@ -502,110 +666,62 @@ export default class StudentTerminal extends React.Component {
                   onPaste={this.preventStudentClipboard}
                   style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
                 >
-                  {/* Sweeping Forensic Watermark Overlay */}
-                  <div className="absolute inset-0 pointer-events-none select-none flex flex-col justify-around opacity-15 rotate-[-22deg] transform scale-125 z-30 text-[11px] text-cyan-600 font-bold tracking-widest leading-loose">
-                    {Array.from({ length: 12 }).map((_, i) => (
-                      <div key={i} className="whitespace-nowrap">
-                        STRICTLY CONFIDENTIAL — ROLL: {studentRoll} | SEAT: {studentSeat} | CENTER: {studentCenterCode} | IP: 127.0.0.1
-                      </div>
-                    ))}
-                  </div>
 
-                  {/* PDF Sheet Canvas / White Document Sheet */}
-                  <div className="bg-white text-slate-900 p-8 sm:p-10 rounded shadow-2xl border-2 border-slate-300 max-w-3xl mx-auto font-serif relative z-20 space-y-6">
-                    {/* PDF Header Seal */}
-                    <div className="text-center border-b-2 border-slate-900 pb-4 space-y-1">
-                      <div className="flex items-center justify-center gap-2 text-red-700 font-bold text-xs uppercase tracking-widest font-mono">
-                        <span>🏛️ CENTRAL UNIVERSITY EXAMINATION BOARD</span>
-                      </div>
-                      <h1 className="text-2xl font-black tracking-wide text-slate-950 uppercase font-serif">
-                        CENTRAL UNIVERSITY EXAMINATION 2026
-                      </h1>
-                      <p className="text-sm font-semibold text-slate-700 uppercase tracking-wider font-mono">
-                        ANNUAL DEGREE EXAMINATIONS — OFFICIAL QUESTION PAPER
-                      </p>
-                    </div>
 
-                    {/* PDF Metadata Grid Table */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 border border-slate-400 p-3 bg-slate-50 rounded text-xs font-mono text-slate-800">
-                      <div>
-                        <span className="text-slate-500 block text-[9px] uppercase font-bold">Subject Code</span>
-                        <span className="font-bold text-blue-900">{studentSubjectCode}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500 block text-[9px] uppercase font-bold">Max Marks</span>
-                        <span className="font-bold text-slate-900">100 Marks</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500 block text-[9px] uppercase font-bold">Time Allowed</span>
-                        <span className="font-bold text-slate-900">3.0 Hours</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500 block text-[9px] uppercase font-bold">Desk / Seat ID</span>
-                        <span className="font-bold text-emerald-800">{studentSeat}</span>
-                      </div>
-                    </div>
+                  {/* Exact Uploaded PDF Document Stream or Clean Question Paper Payload */}
+                  {(() => {
+                    const { dataUrl: activePdfDataUrl, text: activePaperText, pages: activePages } = this.getPaperDetails(studentPaperContent, studentSubjectCode);
+                    const displayContent = activePaperText || this.getCleanPaperContent(studentPaperContent, studentSubjectCode);
 
-                    {/* Candidate Instructions */}
-                    <div className="bg-amber-50/80 border-l-4 border-amber-500 p-3 text-xs text-slate-800 font-sans space-y-1">
-                      <p className="font-bold text-amber-900 uppercase font-mono">📌 CANDIDATE DIRECTIVES:</p>
-                      <p className="text-slate-700 leading-snug">
-                        1. Scroll to read all question sections. 2. Standalone kiosk mode active; output printing and clipboard capture are disabled.
-                      </p>
-                    </div>
-
-                    {/* Visual Uploaded PDF Document Stream */}
-                    {this.getPaperDataUrl(studentSubjectCode) && (
-                      <div className="border-2 border-slate-300 rounded-lg overflow-hidden bg-slate-100 p-2 shadow-inner my-4">
-                        <div className="bg-slate-900 text-slate-200 text-xs font-mono px-3 py-1.5 flex items-center justify-between rounded-t">
-                          <span>📄 UPLOADED PDF DOCUMENT VISUAL IMAGE STREAM</span>
-                          <span className="text-emerald-400 font-bold">● LIVE VERIFIED PDF VIEW</span>
+                    if (activePages && activePages.length > 0) {
+                      return (
+                        <div className="w-full relative z-20">
+                          <ImagePaperViewer pages={activePages} subjectCode={studentSubjectCode} title={`Official Question Paper (${studentSubjectCode})`} />
                         </div>
-                        <iframe
-                          src={this.getPaperDataUrl(studentSubjectCode)}
-                          title="Uploaded PDF Document Image Stream"
-                          className="w-full h-[650px] border-0 rounded-b bg-white"
-                        />
-                      </div>
-                    )}
+                      );
+                    }
 
-                    {/* Question Paper Content Section */}
-                    <div className="space-y-4 pt-2">
-                      <div className="border-b border-slate-300 pb-1 flex items-center justify-between text-xs font-bold font-mono text-slate-600 uppercase">
-                        <span>SECTION A — MAIN EXAMINATION QUESTIONS</span>
-                        <span>[ TOTAL MARKS: 100 ]</span>
-                      </div>
+                    if (activePdfDataUrl) {
+                      return (
+                        <div className="w-full relative z-20">
+                          <PdfCanvasViewer pdfDataUrl={activePdfDataUrl} />
+                        </div>
+                      );
+                    }
 
-                      <div className="space-y-3 font-sans text-slate-900 text-sm leading-relaxed">
-                        {this.getCleanPaperContent(studentPaperContent, studentSubjectCode)
-                          .split('\n')
-                          .map((line, idx) => {
-                            const trimmed = line.trim();
-                            if (!trimmed) return null;
-                            if (trimmed.startsWith('CONFIDENTIAL') || trimmed.startsWith('Subject:') || trimmed.startsWith('Max Marks:')) {
-                              return (
-                                <div key={idx} className="bg-slate-100 text-slate-800 font-mono text-xs font-bold p-2.5 rounded border border-slate-300">
-                                  {trimmed}
-                                </div>
-                              );
-                            }
-                            return (
-                              <div key={idx} className="p-4 bg-slate-50 rounded-lg border border-slate-200 shadow-sm space-y-1 hover:border-slate-300 transition-colors">
-                                <p className="font-medium text-slate-900 leading-normal">
-                                  {trimmed}
-                                </p>
-                              </div>
-                            );
-                          })}
-                      </div>
-                    </div>
+                    return (
+                      <div className="bg-slate-900/90 text-slate-100 p-6 sm:p-8 rounded-xl shadow-2xl border border-slate-800 max-w-4xl mx-auto font-sans relative z-20 space-y-6">
+                        {/* Header Badge */}
+                        <div className="border-b border-slate-800 pb-4 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+                          <div className="flex items-center gap-2">
+                            <span className="bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2.5 py-1 rounded font-bold uppercase tracking-wider">
+                              📄 OFFICIAL QUESTION PAPER ({studentSubjectCode})
+                            </span>
+                            <span className="text-slate-400">| Seat: {studentSeat}</span>
+                          </div>
+                          <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2.5 py-0.5 rounded font-bold uppercase text-[10px]">
+                            ● DECRYPTED & VERIFIED
+                          </span>
+                        </div>
 
-                    {/* PDF Footer Stamps */}
-                    <div className="border-t-2 border-slate-900 pt-4 flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono text-slate-600">
-                      <span>END OF QUESTION PAPER — PAGE 1 / 1</span>
-                      <span>DIGITALLY SIGNED & TIME-LOCKED 🔒</span>
-                    </div>
-                  </div>
+                        {/* Question Content Display */}
+                        <div className="space-y-4 pt-2">
+                          <div className="text-xs font-mono font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1">
+                            SECTION A — EXAMINATION QUESTIONS & INSTRUCTIONS
+                          </div>
+                          <div className="bg-slate-950 p-5 rounded-lg border border-slate-800 font-mono text-sm leading-relaxed text-slate-200 whitespace-pre-wrap shadow-inner">
+                            {displayContent || 'No question paper payload loaded.'}
+                          </div>
+                        </div>
+
+                        {/* Document Footer */}
+                        <div className="border-t border-slate-800 pt-4 flex items-center justify-between text-[11px] font-mono text-slate-500">
+                          <span>END OF QUESTION PAPER PAYLOAD</span>
+                          <span>SECURITY TIME-LOCKED 🔒</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Focus Lost Security Warning Modal */}

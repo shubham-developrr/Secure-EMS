@@ -26,6 +26,31 @@ def ensure_question_papers_encryption_key_column(cursor):
         cursor.execute("ALTER TABLE question_papers ADD COLUMN admin_key TEXT;")
     if "supervisor_key" not in columns:
         cursor.execute("ALTER TABLE question_papers ADD COLUMN supervisor_key TEXT;")
+    if "blockchain_tx_hash" not in columns:
+        cursor.execute("ALTER TABLE question_papers ADD COLUMN blockchain_tx_hash TEXT;")
+    if "paper_hash" not in columns:
+        cursor.execute("ALTER TABLE question_papers ADD COLUMN paper_hash TEXT;")
+    if "on_chain_status" not in columns:
+        cursor.execute("ALTER TABLE question_papers ADD COLUMN on_chain_status TEXT;")
+
+def ensure_audit_logs_blockchain_columns(cursor):
+    cursor.execute("PRAGMA table_info(audit_logs);")
+    columns = {row[1] for row in cursor.fetchall()}
+    if "blockchain_tx_hash" not in columns:
+        cursor.execute("ALTER TABLE audit_logs ADD COLUMN blockchain_tx_hash TEXT;")
+    if "on_chain_status" not in columns:
+        cursor.execute("ALTER TABLE audit_logs ADD COLUMN on_chain_status TEXT;")
+
+
+def ensure_scheduled_exams_columns(cursor):
+    cursor.execute("PRAGMA table_info(scheduled_exams);")
+    columns = {row[1] for row in cursor.fetchall()}
+    if "supervisor_unlocked_at" not in columns:
+        cursor.execute("ALTER TABLE scheduled_exams ADD COLUMN supervisor_unlocked_at TIMESTAMP;")
+    if "unlocked_by_user" not in columns:
+        cursor.execute("ALTER TABLE scheduled_exams ADD COLUMN unlocked_by_user TEXT;")
+    if "hall_publish_token" not in columns:
+        cursor.execute("ALTER TABLE scheduled_exams ADD COLUMN hall_publish_token TEXT;")
 
 def initialize_database():
     # Check if database already exists
@@ -92,7 +117,15 @@ def initialize_database():
     """)
     ensure_question_papers_encryption_key_column(cursor)
 
-    # 5. Audit Logs Table (Append-Only for Security)
+def ensure_audit_logs_hash_columns(cursor):
+    cursor.execute("PRAGMA table_info(audit_logs);")
+    columns = {row[1] for row in cursor.fetchall()}
+    if "previous_hash" not in columns:
+        cursor.execute("ALTER TABLE audit_logs ADD COLUMN previous_hash TEXT;")
+    if "current_hash" not in columns:
+        cursor.execute("ALTER TABLE audit_logs ADD COLUMN current_hash TEXT;")
+
+    # 5. Audit Logs Table (Append-Only Cryptographic Ledger)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS audit_logs (
         log_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,11 +134,49 @@ def initialize_database():
         action_type TEXT NOT NULL,
         details TEXT,
         ip_address TEXT,
+        previous_hash TEXT,
+        current_hash TEXT,
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(user_id),
         FOREIGN KEY (center_id) REFERENCES exam_centers(center_id)
     );
     """)
+    ensure_audit_logs_hash_columns(cursor)
+    ensure_audit_logs_blockchain_columns(cursor)
+
+    # 6. Student Verifications Table (Biometric Candidate Photo Storage)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS student_verifications (
+        verification_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        roll_number TEXT UNIQUE NOT NULL,
+        seat_id TEXT,
+        center_code TEXT,
+        captured_image_base64 TEXT,
+        clearance_token TEXT,
+        facial_match_confidence REAL,
+        status TEXT DEFAULT 'VERIFIED',
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
+
+    # 7. Scheduled Exams Table (AI Agent Scheduling Integration)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS scheduled_exams (
+        schedule_id TEXT PRIMARY KEY,
+        center_code TEXT NOT NULL,
+        exam_date TEXT NOT NULL,
+        exam_time TEXT DEFAULT '10:00 AM',
+        subject_code TEXT NOT NULL,
+        duration_mins INTEGER DEFAULT 180,
+        scheduled_by TEXT DEFAULT 'AI_AGENT_SCHEDULER',
+        status TEXT DEFAULT 'SCHEDULED',
+        supervisor_unlocked_at TIMESTAMP,
+        unlocked_by_user TEXT,
+        hall_publish_token TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
+    ensure_scheduled_exams_columns(cursor)
 
     # Insert default baseline roles if they don't exist
     default_roles = [

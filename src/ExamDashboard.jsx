@@ -1,7 +1,73 @@
 import React from 'react';
 import VerificationTerminal from './VerificationTerminal.jsx';
+import PdfCanvasViewer from './PdfCanvasViewer.jsx';
+import ImagePaperViewer from './ImagePaperViewer.jsx';
 
-const API_BASE = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1' ? '' : 'http://localhost:8000');
+const API_BASE = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1' ? '' : 'http://127.0.0.1:8000');
+
+const ensurePdfBlobUrl = (content) => {
+  if (!content || typeof content !== 'string') return '';
+  const trimmed = content.trim();
+
+  if (trimmed.startsWith('blob:')) {
+    return trimmed;
+  }
+
+  let base64Data = '';
+
+  if (trimmed.includes('base64,')) {
+    base64Data = trimmed.split('base64,')[1];
+  } else if (trimmed.startsWith('data:image/')) {
+    return trimmed;
+  } else if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed.dataUrl) return ensurePdfBlobUrl(parsed.dataUrl);
+    } catch (e) {}
+  } else if (trimmed.startsWith('JVBERi')) {
+    base64Data = trimmed;
+  } else if (
+    trimmed.includes('%PDF') ||
+    trimmed.includes('\uFFFD') ||
+    trimmed.includes('µp s@%H') ||
+    /[\x00-\x08\x0E-\x1F]/.test(trimmed)
+  ) {
+    try {
+      const pdfStartIndex = trimmed.indexOf('%PDF');
+      const cleanContent = pdfStartIndex !== -1 ? trimmed.slice(pdfStartIndex) : trimmed;
+      const bytes = new Uint8Array(cleanContent.length);
+      for (let i = 0; i < cleanContent.length; i++) {
+        bytes[i] = cleanContent.charCodeAt(i) & 0xff;
+      }
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+        return URL.createObjectURL(blob);
+      }
+    } catch (e) {
+      console.error('Failed to create Blob from binary string', e);
+    }
+  }
+
+  if (base64Data) {
+    try {
+      const cleanB64 = base64Data.replace(/\s/g, '');
+      if (/^[A-Za-z0-9+/=]+$/.test(cleanB64) && cleanB64.length % 4 === 0) {
+        const binaryString = typeof atob !== 'undefined' ? atob(cleanB64) : '';
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        const blob = new Blob([bytes], { type: 'application/pdf' });
+        if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+          return URL.createObjectURL(blob);
+        }
+      }
+    } catch (e) {}
+  }
+
+  return '';
+};
 
 export default class ExamDashboard extends React.Component {
   constructor(props) {
@@ -12,7 +78,7 @@ export default class ExamDashboard extends React.Component {
       isUnlocked: false,
       username: 'supervisor_center1',
       centerCode: 'CTR-101',
-      subjectCode: 'CS-602',
+      subjectCode: '',
       adminToken: 'CTRL-KEY-999',
       pin: '',
       countdown: 10,
@@ -25,6 +91,8 @@ export default class ExamDashboard extends React.Component {
       auditLoading: false,
       auditError: '',
       // Controller Portal state
+      uploadMode: 'image_pagewise',
+      imagePages: [],
       newSubjectCode: 'MATH-201',
       newPaperText: 'CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: Mathematics (MATH-201)\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Evaluate the definite integral of sin^2(x) from 0 to pi.\nQ2. Solve the linear differential equation dy/dx + P(x)y = Q(x).\nQ3. State and prove Cayley-Hamilton Theorem.',
       newDelaySeconds: 15,
@@ -32,6 +100,7 @@ export default class ExamDashboard extends React.Component {
       pdfFileName: '',
       pdfFileSize: '',
       pdfPreviewUrl: '',
+      showInlinePdfViewer: false,
       uploading: false,
       uploadSuccess: null,
       uploadError: '',
@@ -41,7 +110,7 @@ export default class ExamDashboard extends React.Component {
       studentRoll: '2026-CS-101',
       studentSeat: 'DESK-42',
       studentCenterCode: 'CTR-101',
-      studentSubjectCode: 'CS-602',
+      studentSubjectCode: '',
       studentPaperContent: '',
       studentPhotoUrl: null,
       studentUnlocked: false,
@@ -61,7 +130,7 @@ export default class ExamDashboard extends React.Component {
       scheduleCenterCode: 'CTR-101',
       scheduleExamDate: new Date(Date.now() + 86400000 * 7).toISOString().split('T')[0],
       scheduleExamTime: '10:00',
-      scheduleSubjectCode: 'CS-602 - DATABASE MANAGEMENT SYSTEMS',
+      scheduleSubjectCode: '',
       scheduleDurationMins: 180,
       scheduling: false,
       aiAgentStep: 0,
@@ -70,12 +139,56 @@ export default class ExamDashboard extends React.Component {
       scheduleError: '',
       scheduledExamsList: [],
       availableCentersForSchedule: [],
+      publishLoading: false,
+      publishSuccess: false,
+      blockchainLedger: [],
+      blockchainLoading: false,
     };
 
     this.lockTimer = null;
     this.sessionTimer = null;
     this.statusTimer = null;
   }
+
+  handlePublishToStudents = async () => {
+    const { centerCode, subjectCode, username } = this.state;
+    if (!subjectCode) return;
+    this.setState({ publishLoading: true, error: '' });
+    try {
+      const response = await fetch(`${API_BASE}/api/supervisor/publish-paper`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          center_code: centerCode,
+          subject_code: subjectCode,
+          supervisor_username: username,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Failed to publish paper.');
+      this.setState({ publishSuccess: true });
+      this.loadScheduledExams();
+    } catch (err) {
+      this.setState({ error: err.message });
+    } finally {
+      this.setState({ publishLoading: false });
+    }
+  };
+
+  loadBlockchainLedger = async () => {
+    this.setState({ blockchainLoading: true });
+    try {
+      const response = await fetch(`${API_BASE}/api/blockchain/ledger`);
+      const data = await response.json();
+      if (response.ok && Array.isArray(data.ledger)) {
+        this.setState({ blockchainLedger: data.ledger });
+      }
+    } catch (e) {
+      console.error('Failed to fetch blockchain ledger', e);
+    } finally {
+      this.setState({ blockchainLoading: false });
+    }
+  };
 
   componentDidMount() {
     this.loadAuditLogs();
@@ -84,6 +197,8 @@ export default class ExamDashboard extends React.Component {
     this.fetchPersonnelStatus();
     this.loadRegisteredCentersForSchedule();
     this.loadScheduledExams();
+    this.loadBlockchainLedger();
+    this.fetchStudentPhoto(this.state.studentRoll);
     this.startLockTimer();
     this.statusTimer = setInterval(this.loadStudentStatuses, 3000);
     window.addEventListener('keydown', this.handleKeyDown);
@@ -95,6 +210,33 @@ export default class ExamDashboard extends React.Component {
     window.addEventListener('cut', this.preventStudentClipboard);
     window.addEventListener('paste', this.preventStudentClipboard);
   }
+
+  fetchStudentPhoto = async (roll) => {
+    const cleanRoll = (roll || this.state.studentRoll || '').trim().toUpperCase();
+    if (!cleanRoll) return;
+
+    try {
+      const cached = localStorage.getItem(`STUDENT_VERIFICATION_${cleanRoll}`);
+      if (cached) {
+        this.setState({ studentPhotoUrl: cached });
+      }
+    } catch (e) {}
+
+    try {
+      const res = await fetch(`${API_BASE}/api/student/verification/${encodeURIComponent(cleanRoll)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.verified && data.captured_image_base64) {
+          this.setState({ studentPhotoUrl: data.captured_image_base64 });
+          try {
+            localStorage.setItem(`STUDENT_VERIFICATION_${cleanRoll}`, data.captured_image_base64);
+          } catch (e) {}
+        }
+      }
+    } catch (e) {
+      console.warn('Could not fetch student verification photo', e);
+    }
+  };
 
   loadRegisteredCentersForSchedule = async () => {
     let list = [
@@ -131,14 +273,24 @@ export default class ExamDashboard extends React.Component {
 
   loadScheduledExams = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/scheduled-exams`);
+      const res = await fetch(`${API_BASE}/api/supervisor/scheduled-exams?center_code=${this.state.centerCode}`);
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.scheduled_exams)) {
           this.setState({ scheduledExamsList: data.scheduled_exams });
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      try {
+        const res = await fetch(`${API_BASE}/api/scheduled-exams`);
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.scheduled_exams)) {
+            this.setState({ scheduledExamsList: data.scheduled_exams });
+          }
+        }
+      } catch (err) {}
+    }
   };
 
   handleScheduleExamByAiAgent = async (e) => {
@@ -430,20 +582,177 @@ export default class ExamDashboard extends React.Component {
       pdfFileName: '',
       pdfFileSize: '',
       pdfPreviewUrl: '',
+      showInlinePdfViewer: false,
+      newPaperText: '',
+    });
+  };
+
+  handleImagePagesChange = async (e) => {
+    const files = e.target.files ? Array.from(e.target.files) : [];
+    if (files.length === 0) return;
+
+    const validFiles = files.filter((f) => f.type.startsWith('image/'));
+    if (validFiles.length === 0) {
+      this.setState({ uploadError: 'Please select valid image files (.png, .jpg, .jpeg, .webp).' });
+      return;
+    }
+
+    try {
+      const readPromises = validFiles.map((file) => {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (evt) => {
+            resolve({
+              id: 'page_' + Math.random().toString(36).substr(2, 9),
+              fileName: file.name,
+              sizeKb: (file.size / 1024).toFixed(1) + ' KB',
+              dataUrl: evt.target.result,
+            });
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+      });
+
+      const newPages = await Promise.all(readPromises);
+      this.setState((prev) => {
+        const updatedPages = [...prev.imagePages, ...newPages];
+        const pagedPayload = JSON.stringify({
+          type: 'IMAGE_PAGES',
+          pages: updatedPages.map((p) => p.dataUrl),
+          pageCount: updatedPages.length,
+          subjectCode: prev.newSubjectCode || 'MATH-201',
+        });
+        return {
+          imagePages: updatedPages,
+          newPaperText: pagedPayload,
+          uploadError: '',
+        };
+      });
+    } catch (err) {
+      this.setState({ uploadError: 'Failed to process selected image files.' });
+    }
+  };
+
+  handleRemoveImagePage = (index) => {
+    this.setState((prev) => {
+      const updated = prev.imagePages.filter((_, i) => i !== index);
+      const pagedPayload = updated.length > 0 ? JSON.stringify({
+        type: 'IMAGE_PAGES',
+        pages: updated.map((p) => p.dataUrl),
+        pageCount: updated.length,
+        subjectCode: prev.newSubjectCode || 'MATH-201',
+      }) : '';
+      return {
+        imagePages: updated,
+        newPaperText: pagedPayload,
+      };
+    });
+  };
+
+  handleMovePageUp = (index) => {
+    if (index === 0) return;
+    this.setState((prev) => {
+      const updated = [...prev.imagePages];
+      const temp = updated[index];
+      updated[index] = updated[index - 1];
+      updated[index - 1] = temp;
+      const pagedPayload = JSON.stringify({
+        type: 'IMAGE_PAGES',
+        pages: updated.map((p) => p.dataUrl),
+        pageCount: updated.length,
+        subjectCode: prev.newSubjectCode || 'MATH-201',
+      });
+      return {
+        imagePages: updated,
+        newPaperText: pagedPayload,
+      };
+    });
+  };
+
+  handleMovePageDown = (index) => {
+    this.setState((prev) => {
+      if (index >= prev.imagePages.length - 1) return null;
+      const updated = [...prev.imagePages];
+      const temp = updated[index];
+      updated[index] = updated[index + 1];
+      updated[index + 1] = temp;
+      const pagedPayload = JSON.stringify({
+        type: 'IMAGE_PAGES',
+        pages: updated.map((p) => p.dataUrl),
+        pageCount: updated.length,
+        subjectCode: prev.newSubjectCode || 'MATH-201',
+      });
+      return {
+        imagePages: updated,
+        newPaperText: pagedPayload,
+      };
+    });
+  };
+
+  handleClearAllPages = () => {
+    this.setState({
+      imagePages: [],
       newPaperText: '',
     });
   };
 
   handleUploadPaper = async (e) => {
     e.preventDefault();
-    const { newSubjectCode, newPaperText, newDelaySeconds } = this.state;
+    const { newSubjectCode, newPaperText, newDelaySeconds, uploadMode, imagePages, pdfFile, pdfPreviewUrl, pdfFileName } = this.state;
 
-    if (!newSubjectCode.trim() || !newPaperText.trim()) {
+    if (uploadMode === 'image_pagewise' && imagePages.length === 0) {
+      this.setState({ uploadError: 'Please upload at least one image page for the question paper.' });
+      return;
+    }
+
+    if (uploadMode === 'pdf' && !pdfFile && !newPaperText.trim()) {
       this.setState({ uploadError: 'Subject code and question paper content (via PDF upload) are required.' });
       return;
     }
 
+    if (!newSubjectCode.trim()) {
+      this.setState({ uploadError: 'Subject code is required.' });
+      return;
+    }
+
     this.setState({ uploading: true, uploadError: '', uploadSuccess: null });
+
+    const subj = newSubjectCode.trim().toUpperCase();
+
+    // Persist to CUSTOM_PAPERS localStorage for paged visual rendering across all terminals
+    try {
+      if (uploadMode === 'image_pagewise' && imagePages.length > 0) {
+        const pageDataUrls = imagePages.map((p) => p.dataUrl);
+        const paperObj = {
+          text: JSON.stringify({
+            type: 'IMAGE_PAGES',
+            pages: pageDataUrls,
+            pageCount: pageDataUrls.length,
+            subjectCode: subj,
+          }),
+          pages: pageDataUrls,
+          dataUrl: pageDataUrls[0] || '',
+          fileName: `Paper_${subj}_(${pageDataUrls.length}_Pages)`,
+        };
+        const customPapers = JSON.parse(localStorage.getItem('CUSTOM_PAPERS') || '{}');
+        customPapers[subj] = paperObj;
+        localStorage.setItem('CUSTOM_PAPERS', JSON.stringify(customPapers));
+        localStorage.setItem('LAST_UPLOADED_PAPER', JSON.stringify(paperObj));
+      } else if (pdfFile || pdfPreviewUrl) {
+        const paperObj = {
+          text: newPaperText,
+          dataUrl: pdfPreviewUrl || this.state.pdfDataUrl || '',
+          fileName: pdfFileName || file?.name || 'question_paper.pdf',
+        };
+        const customPapers = JSON.parse(localStorage.getItem('CUSTOM_PAPERS') || '{}');
+        customPapers[subj] = paperObj;
+        localStorage.setItem('CUSTOM_PAPERS', JSON.stringify(customPapers));
+        localStorage.setItem('LAST_UPLOADED_PAPER', JSON.stringify(paperObj));
+      }
+    } catch (e) {
+      console.error('Failed to update localStorage CUSTOM_PAPERS', e);
+    }
 
     let finalData = null;
 
@@ -743,10 +1052,15 @@ export default class ExamDashboard extends React.Component {
 
       this.setState({
         studentPaperContent: data.content,
+        studentPhotoUrl: data.captured_image_base64 || this.state.studentPhotoUrl,
         studentUnlocked: true,
         studentLoading: false,
         studentError: '',
         studentViolationsCount: 0,
+      }, () => {
+        if (!data.captured_image_base64) {
+          this.fetchStudentPhoto(studentRoll);
+        }
       });
 
       this.loadAuditLogs();
@@ -755,24 +1069,42 @@ export default class ExamDashboard extends React.Component {
         document.documentElement.requestFullscreen().catch(() => {});
       }
     } catch (err) {
-      const fallbackContent = this.getFallbackPaperText(studentSubjectCode);
       this.setState({
-        studentPaperContent: fallbackContent,
-        studentUnlocked: true,
+        studentPaperContent: '',
+        studentUnlocked: false,
         studentLoading: false,
-        studentError: '',
+        studentError: err.message || 'Failed to fetch scheduled question paper.',
         studentViolationsCount: 0,
       });
     }
   };
 
   getPaperDataUrl = (subjectCode) => {
-    const code = (subjectCode || '').toUpperCase().trim();
+    let url = ensurePdfBlobUrl(this.state.studentPaperContent);
+    if (url) return url;
+
     try {
       const customPapers = JSON.parse(localStorage.getItem('CUSTOM_PAPERS') || '{}');
-      const paperObj = customPapers[code];
+      const code = (subjectCode || '').toUpperCase().trim();
+
+      let paperObj = customPapers[code];
+      if (!paperObj) {
+        const matchingKey = Object.keys(customPapers).find((k) => k.toUpperCase().trim() === code);
+        if (matchingKey) paperObj = customPapers[matchingKey];
+      }
+      if (!paperObj && Object.keys(customPapers).length > 0) {
+        const keys = Object.keys(customPapers);
+        paperObj = customPapers[keys[keys.length - 1]];
+      }
+      if (!paperObj) {
+        const lastUploaded = localStorage.getItem('LAST_UPLOADED_PAPER');
+        if (lastUploaded) paperObj = JSON.parse(lastUploaded);
+      }
+
       if (paperObj && typeof paperObj === 'object' && paperObj.dataUrl) {
-        return paperObj.dataUrl;
+        return ensurePdfBlobUrl(paperObj.dataUrl) || paperObj.dataUrl;
+      } else if (typeof paperObj === 'string') {
+        return ensurePdfBlobUrl(paperObj);
       }
     } catch (e) {
       console.error('Failed to read paper dataUrl from localStorage', e);
@@ -780,17 +1112,92 @@ export default class ExamDashboard extends React.Component {
     return '';
   };
 
+  getPaperDetails = (rawContent, subjectCode) => {
+    let dataUrl = ensurePdfBlobUrl(rawContent);
+    let text = '';
+    let pages = null;
+
+    if (typeof rawContent === 'string' && rawContent.trim()) {
+      const trimmed = rawContent.trim();
+      if (trimmed.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed.dataUrl) dataUrl = ensurePdfBlobUrl(parsed.dataUrl) || parsed.dataUrl;
+          if (parsed.pages && Array.isArray(parsed.pages)) {
+            pages = parsed.pages;
+          }
+          if (parsed.text) {
+            if (typeof parsed.text === 'string' && parsed.text.trim().startsWith('{')) {
+              try {
+                const innerParsed = JSON.parse(parsed.text.trim());
+                if (innerParsed.pages && Array.isArray(innerParsed.pages)) pages = innerParsed.pages;
+              } catch (e) {
+                text = parsed.text;
+              }
+            } else {
+              text = parsed.text;
+            }
+          }
+        } catch (e) {
+          text = rawContent;
+        }
+      } else if (!dataUrl) {
+        text = rawContent;
+      }
+    }
+
+    if (!dataUrl && (!pages || pages.length === 0)) {
+      try {
+        const customPapers = JSON.parse(localStorage.getItem('CUSTOM_PAPERS') || '{}');
+        const code = (subjectCode || '').toUpperCase().trim();
+
+        let paperObj = customPapers[code];
+        if (!paperObj) {
+          const matchingKey = Object.keys(customPapers).find((k) => k.toUpperCase().trim() === code);
+          if (matchingKey) paperObj = customPapers[matchingKey];
+        }
+        if (!paperObj && Object.keys(customPapers).length > 0) {
+          const keys = Object.keys(customPapers);
+          paperObj = customPapers[keys[keys.length - 1]];
+        }
+        if (!paperObj) {
+          const lastUploaded = localStorage.getItem('LAST_UPLOADED_PAPER');
+          if (lastUploaded) paperObj = JSON.parse(lastUploaded);
+        }
+
+        if (paperObj && typeof paperObj === 'object') {
+          if (paperObj.pages && Array.isArray(paperObj.pages)) pages = paperObj.pages;
+          if (paperObj.dataUrl) dataUrl = ensurePdfBlobUrl(paperObj.dataUrl) || paperObj.dataUrl;
+          if (!text && paperObj.text) {
+            if (typeof paperObj.text === 'string' && paperObj.text.trim().startsWith('{')) {
+              try {
+                const p = JSON.parse(paperObj.text.trim());
+                if (p.pages && Array.isArray(p.pages)) pages = p.pages;
+              } catch (e) {}
+            } else {
+              text = paperObj.text;
+            }
+          }
+        } else if (typeof paperObj === 'string') {
+          dataUrl = ensurePdfBlobUrl(paperObj);
+          if (!dataUrl && !text) text = paperObj;
+        }
+      } catch (e) {}
+    }
+
+    if (pages && pages.length > 0) {
+      text = '';
+    }
+
+    return { dataUrl, text, pages };
+  };
+
   getCleanPaperContent = (rawContent, subjectCode) => {
-    if (!rawContent || typeof rawContent !== 'string') {
-      return this.getFallbackPaperText(subjectCode);
+    const { text, pages } = this.getPaperDetails(rawContent, subjectCode);
+    if (pages && pages.length > 0) {
+      return '';
     }
-
-    const nonPrintableCount = (rawContent.match(/[^\x09\x0A\x0D\x20-\x7E]/g) || []).length;
-    if (nonPrintableCount > 3 || rawContent.includes('\uFFFD') || rawContent.includes('µp s@%H')) {
-      return this.getFallbackPaperText(subjectCode);
-    }
-
-    return rawContent;
+    return text || (typeof rawContent === 'string' && !rawContent.trim().startsWith('{') ? rawContent : '');
   };
 
   getFallbackPaperText = (subjectCode) => {
@@ -798,25 +1205,12 @@ export default class ExamDashboard extends React.Component {
     try {
       const customPapers = JSON.parse(localStorage.getItem('CUSTOM_PAPERS') || '{}');
       if (customPapers[code]) {
-        return customPapers[code];
+        return typeof customPapers[code] === 'string' ? customPapers[code] : customPapers[code].text || '';
       }
     } catch (e) {
       console.error('Failed to read CUSTOM_PAPERS from localStorage', e);
     }
-
-    if (code.includes('CS-602')) {
-      return `CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: Computer Science - Database Systems & Security (CS-602)\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Explain the architecture of FastAPI and asynchronous request handling.\nQ2. Discuss database indexing strategies for high-concurrency systems.\nQ3. Describe the implementation of time-locked cryptographic decryption.`;
-    }
-    if (code.includes('CS-901')) {
-      return `CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: Advanced Computer Science (CS-901)\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Analyze the time complexity of parallel graph algorithms.\nQ2. Design a fault-tolerant distributed consensus protocol.\nQ3. Explain zero-knowledge proofs and public-key cryptography.`;
-    }
-    if (code.includes('CC-201')) {
-      return `CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: Cloud Computing (CC-201)\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Differentiate between IaaS, PaaS, and SaaS architectural models.\nQ2. Explain containerization using Docker and Kubernetes orchestration.\nQ3. Discuss cloud data encryption and key management standards.`;
-    }
-    if (code.includes('MATH-801')) {
-      return `CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: Applied Mathematics (MATH-801)\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Formulate and solve a system of non-linear differential equations.\nQ2. Derive the Runge-Kutta 4th order numerical method.\nQ3. Apply Fourier transforms to solve boundary value problems.`;
-    }
-    return `CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: ${code || 'Mathematics (MATH-201)'}\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Evaluate the definite integral of sin^2(x) from 0 to pi.\nQ2. Solve the linear differential equation dy/dx + P(x)y = Q(x).\nQ3. State and prove Cayley-Hamilton Theorem.`;
+    return '';
   };
 
   handleExitStudentKiosk = () => {
@@ -968,6 +1362,19 @@ export default class ExamDashboard extends React.Component {
             <div className="flex items-center gap-2 bg-slate-900 p-1 rounded border border-slate-800">
               <button
                 onClick={() => {
+                  this.setState({ activeTab: 'BLOCKCHAIN' });
+                  this.loadBlockchainLedger();
+                }}
+                className={`px-3 py-1.5 rounded text-xs font-semibold transition-all ${
+                  activeTab === 'BLOCKCHAIN'
+                    ? 'bg-purple-600 text-slate-950 shadow font-bold'
+                    : 'text-purple-400 hover:text-purple-300'
+                }`}
+              >
+                ⛓️ BLOCKCHAIN LEDGER
+              </button>
+              <button
+                onClick={() => {
                   this.setState({ activeTab: 'PERSONNEL' });
                   this.fetchPersonnelStatus();
                 }}
@@ -1037,6 +1444,101 @@ export default class ExamDashboard extends React.Component {
           </div>
 
           <div className="p-8">
+            {activeTab === 'BLOCKCHAIN' && (
+              <div className="space-y-6 font-sans">
+                <div className="border-b border-slate-700 pb-4 flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-xl font-bold text-purple-400 uppercase tracking-wide flex items-center gap-2">
+                      ⛓️ DECENTRALIZED BLOCKCHAIN AUDIT LEDGER
+                    </h2>
+                    <p className="text-xs text-slate-400 font-mono mt-1">
+                      Immutable SHA-256 Block Chaining & Zero-Trust Verification Engine (Polygon Amoy Protocol)
+                    </p>
+                  </div>
+                  <button
+                    onClick={this.loadBlockchainLedger}
+                    className="bg-purple-900 hover:bg-purple-800 text-purple-200 border border-purple-700 px-3 py-1.5 rounded-lg text-xs font-semibold font-mono"
+                  >
+                    🔄 REFRESH LEDGER
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 font-mono">
+                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
+                    <span className="text-[11px] text-slate-400 uppercase tracking-wider">Anchored Blocks</span>
+                    <div className="text-2xl font-bold text-purple-400">
+                      {this.state.blockchainLedger.length > 0
+                        ? Math.max(...this.state.blockchainLedger.map((b) => b.block_number)) + 1
+                        : 1}
+                    </div>
+                  </div>
+                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
+                    <span className="text-[11px] text-slate-400 uppercase tracking-wider">Anchored Transactions</span>
+                    <div className="text-2xl font-bold text-cyan-400">{this.state.blockchainLedger.length}</div>
+                  </div>
+                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
+                    <span className="text-[11px] text-slate-400 uppercase tracking-wider">Chain Security</span>
+                    <div className="text-sm font-bold text-emerald-400 flex items-center gap-1.5 mt-1">
+                      <span>🟢 100% IMMUTABLE</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <h3 className="text-xs uppercase tracking-wider font-mono font-bold text-slate-400">
+                    Live On-Chain Block Explorer Records
+                  </h3>
+                  <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950">
+                    <table className="w-full text-left font-mono text-xs">
+                      <thead className="bg-slate-900 text-slate-400 uppercase border-b border-slate-800">
+                        <tr>
+                          <th className="p-3">Block #</th>
+                          <th className="p-3">Record ID</th>
+                          <th className="p-3">Transaction Hash</th>
+                          <th className="p-3">Payload SHA-256 Digest</th>
+                          <th className="p-3">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/80 text-slate-300">
+                        {this.state.blockchainLedger.length === 0 ? (
+                          <tr>
+                            <td colSpan="5" className="p-6 text-center text-slate-500 italic">
+                              No transactions anchored on blockchain yet. Upload question papers or perform actions to generate on-chain blocks.
+                            </td>
+                          </tr>
+                        ) : (
+                          this.state.blockchainLedger.map((block) => (
+                            <tr key={block.tx_hash} className="hover:bg-slate-900/60">
+                              <td className="p-3 font-bold text-purple-400">#{block.block_number}</td>
+                              <td className="p-3 font-bold text-cyan-300">{block.record_id}</td>
+                              <td className="p-3">
+                                <a
+                                  href={block.explorer_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-purple-300 hover:underline font-bold"
+                                >
+                                  {block.tx_hash ? `${block.tx_hash.substring(0, 16)}...` : '0x...'}
+                                </a>
+                              </td>
+                              <td className="p-3 text-slate-400 text-[11px]">
+                                {block.payload_hash ? `${block.payload_hash.substring(0, 20)}...` : '0x...'}
+                              </td>
+                              <td className="p-3">
+                                <span className="bg-emerald-950 border border-emerald-800 text-emerald-300 text-[10px] px-2 py-0.5 rounded font-bold">
+                                  ● {block.status || 'CONFIRMED'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {activeTab === 'SCHEDULE' && (
               <div className="space-y-8 font-sans">
                 <div className="border-b border-slate-700 pb-4 flex flex-wrap items-center justify-between gap-4">
@@ -1522,136 +2024,138 @@ export default class ExamDashboard extends React.Component {
                     </div>
                   </div>
 
-                  {/* PDF Upload Field */}
-                  <div>
-                    <label htmlFor="pdf-upload-input-dashboard" className="block text-xs uppercase tracking-wider text-slate-400 mb-1 font-mono">
-                      Upload Question Paper (PDF Format)
-                    </label>
-                    <div className="relative border-2 border-dashed border-slate-700 hover:border-amber-500 rounded-xl p-5 bg-slate-900/60 transition-colors text-center group cursor-pointer">
-                      <input
-                        id="pdf-upload-input-dashboard"
-                        aria-label="Upload Question Paper PDF"
-                        type="file"
-                        accept=".pdf,application/pdf"
-                        onChange={this.handlePdfFileChange}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                      />
-                      <div className="flex flex-col items-center justify-center space-y-2">
-                        <div className="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center text-xl group-hover:scale-110 transition-transform">
-                          📄
-                        </div>
-                        <div>
-                          <p className="text-sm font-semibold text-slate-200">
-                            {pdfFileName ? (
-                              <span className="text-emerald-400 font-mono">Uploaded PDF: {pdfFileName} ({pdfFileSize})</span>
-                            ) : (
-                              <>Click or drag & drop a <span className="text-amber-400 font-mono">PDF file</span> to upload</>
-                            )}
-                          </p>
-                          <p className="text-xs text-slate-500 mt-0.5 font-mono">Supports .pdf format documents</p>
-                        </div>
-                        {pdfFileName && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              this.handleRemovePdf();
-                            }}
-                            className="relative z-20 text-xs bg-red-950/80 text-red-300 border border-red-800 px-3 py-1 rounded hover:bg-red-900 transition-colors font-mono mt-1"
-                          >
-                            ✕ Remove PDF & Reset
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Uploaded PDF Content Picture / Visual Preview Area */}
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <label className="block text-xs uppercase tracking-wider text-slate-400 font-mono flex items-center gap-2">
-                        <span>📷 Uploaded PDF Document Preview</span>
-                        <span className="text-amber-400 text-[10px] bg-amber-950/80 border border-amber-800 px-2 py-0.5 rounded font-mono">
-                          VISUAL PREVIEW
-                        </span>
+                  {/* Pagewise Image Upload UI */}
+                  <div className="space-y-6">
+                    <div>
+                      <label htmlFor="image-pages-input-dashboard" className="block text-xs uppercase tracking-wider text-slate-400 mb-1 font-mono">
+                        Upload Question Paper Images (Page 1, Page 2, Page 3...)
                       </label>
-                      {pdfFileName && (
-                        <span className="text-xs text-emerald-400 font-mono font-semibold flex items-center gap-1">
-                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                          PDF Loaded
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 min-h-[200px] flex items-center justify-center relative overflow-hidden">
-                      {pdfPreviewUrl ? (
-                        <div className="w-full flex flex-col md:flex-row items-center gap-4 bg-slate-900/90 border border-slate-800 p-4 rounded-xl shadow-lg">
-                          {/* PDF Embedded Page Frame / Thumbnail View */}
-                          <div className="relative w-full md:w-52 h-44 bg-slate-950 rounded-lg overflow-hidden border border-amber-500/30 flex flex-col items-center justify-center">
-                            <object
-                              data={pdfPreviewUrl}
-                              type="application/pdf"
-                              aria-label="Uploaded PDF Preview"
-                              className="w-full h-full object-cover pointer-events-none opacity-85"
-                            >
-                              <div className="flex flex-col items-center justify-center h-full p-3 text-center bg-slate-900">
-                                <div className="text-4xl mb-1">📕</div>
-                                <span className="text-[11px] text-slate-300 font-mono font-bold truncate max-w-[150px]">{pdfFileName}</span>
-                                <span className="text-[10px] text-amber-400 font-mono mt-1">PDF DOCUMENT</span>
-                              </div>
-                            </object>
-                            <div className="absolute top-2 left-2 bg-red-600 text-white text-[10px] font-bold font-mono px-2 py-0.5 rounded shadow">
-                              PDF
-                            </div>
-                          </div>
-
-                          {/* PDF Metadata & Visual Representation Card */}
-                          <div className="flex-1 space-y-2.5 font-mono text-xs text-slate-300 w-full">
-                            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                              <span className="font-bold text-slate-100 text-sm flex items-center gap-2 truncate">
-                                📄 {pdfFileName}
-                              </span>
-                              <span className="bg-slate-800 text-slate-300 border border-slate-700 text-[10px] px-2 py-0.5 rounded shrink-0">
-                                {pdfFileSize}
-                              </span>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-2 text-[11px]">
-                              <div className="bg-slate-950 p-2 rounded border border-slate-800">
-                                <span className="text-slate-500 block text-[9px] uppercase">Format</span>
-                                <span className="text-amber-400 font-bold">PDF Document (.pdf)</span>
-                              </div>
-                              <div className="bg-slate-950 p-2 rounded border border-slate-800">
-                                <span className="text-slate-500 block text-[9px] uppercase">Security Status</span>
-                                <span className="text-emerald-400 font-bold">Ready for 2-Stage Lock</span>
-                              </div>
-                            </div>
-
-                            <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 space-y-1">
-                              <span className="text-slate-400 text-[10px] uppercase font-bold block">
-                                Extracted Document Content Snapshot:
-                              </span>
-                              <p className="text-slate-300 line-clamp-3 italic text-[11px] leading-relaxed">
-                                {newPaperText}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        /* Empty State Picture Area */
-                        <div className="flex flex-col items-center justify-center p-6 text-center space-y-2">
-                          <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center text-2xl shadow-inner">
+                      <div className="relative border-2 border-dashed border-slate-700 hover:border-amber-500 rounded-xl p-5 bg-slate-900/60 transition-colors text-center group cursor-pointer">
+                        <input
+                          id="image-pages-input-dashboard"
+                          aria-label="Upload Question Paper Image Pages"
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={this.handleImagePagesChange}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                        />
+                        <div className="flex flex-col items-center justify-center space-y-2">
+                          <div className="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center text-xl group-hover:scale-110 transition-transform">
                             🖼️
                           </div>
                           <div>
-                            <h4 className="text-sm font-semibold text-slate-300 font-mono">PDF Visual Preview Area</h4>
-                            <p className="text-xs text-slate-500 mt-0.5 max-w-sm font-mono leading-relaxed">
-                              Upload a PDF file using the dropzone above to generate a visual document preview.
+                            <p className="text-sm font-semibold text-slate-200">
+                              Click or drag & drop <span className="text-amber-400 font-mono">Image Pages (.png, .jpg, .jpeg)</span> to upload
+                            </p>
+                            <p className="text-xs text-slate-500 mt-0.5 font-mono">
+                              You can select multiple page images at once or add pages one by one
                             </p>
                           </div>
                         </div>
-                      )}
+                      </div>
                     </div>
+
+                    {/* Uploaded Pages Management List & Live Preview */}
+                    {this.state.imagePages.length > 0 ? (
+                      <div className="space-y-4 bg-slate-950 border border-slate-800 p-4 sm:p-5 rounded-xl">
+                        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                          <div className="flex items-center gap-2">
+                            <span className="text-amber-400 font-bold text-sm font-mono">
+                              📚 Question Paper Pages ({this.state.imagePages.length} Pages Uploaded)
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={this.handleClearAllPages}
+                            className="text-xs bg-red-950 text-red-300 border border-red-800 px-3 py-1 rounded hover:bg-red-900 transition-colors font-mono"
+                          >
+                            🗑️ Clear All Pages
+                          </button>
+                        </div>
+
+                        <div className="space-y-3 max-h-[360px] overflow-y-auto pr-1">
+                          {this.state.imagePages.map((page, idx) => (
+                            <div
+                              key={page.id || idx}
+                              className="flex flex-wrap items-center justify-between bg-slate-900 border border-slate-800 p-3 rounded-lg gap-3"
+                            >
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className="w-12 h-14 bg-slate-950 border border-slate-700 rounded overflow-hidden shrink-0 flex items-center justify-center">
+                                  <img src={page.dataUrl} alt={`Thumbnail Page ${idx + 1}`} className="w-full h-full object-cover" />
+                                </div>
+                                <div className="min-w-0 font-mono">
+                                  <span className="text-xs font-bold text-amber-400 bg-amber-950 border border-amber-800 px-2 py-0.5 rounded">
+                                    PAGE {idx + 1}
+                                  </span>
+                                  <div className="text-xs text-slate-200 font-semibold truncate mt-1">
+                                    {page.fileName}
+                                  </div>
+                                  <div className="text-[10px] text-slate-500">{page.sizeKb}</div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1.5 font-mono text-xs">
+                                <button
+                                  type="button"
+                                  onClick={() => this.handleMovePageUp(idx)}
+                                  disabled={idx === 0}
+                                  className="bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-200 border border-slate-700 px-2.5 py-1 rounded"
+                                  title="Move Page Up"
+                                >
+                                  ⬆️ Up
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => this.handleMovePageDown(idx)}
+                                  disabled={idx === this.state.imagePages.length - 1}
+                                  className="bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-200 border border-slate-700 px-2.5 py-1 rounded"
+                                  title="Move Page Down"
+                                >
+                                  ⬇️ Down
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => this.handleRemoveImagePage(idx)}
+                                  className="bg-red-950 hover:bg-red-900 text-red-300 border border-red-800 px-2.5 py-1 rounded"
+                                  title="Delete Page"
+                                >
+                                  🗑️ Delete
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Live Preview of Pagewise Viewer */}
+                        <div className="pt-4 border-t border-slate-800 space-y-2">
+                          <div className="text-xs font-mono text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                            <span>👁️ Live Document Preview (Student View)</span>
+                            <span className="text-emerald-400 text-[10px]">VERIFIED PAGED LAYOUT</span>
+                          </div>
+                          <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden p-2">
+                            <ImagePaperViewer
+                              pages={this.state.imagePages.map((p) => p.dataUrl)}
+                              subjectCode={this.state.newSubjectCode}
+                              title={`Preview: ${this.state.newSubjectCode}`}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      /* Empty State Image Area */
+                      <div className="bg-slate-950 border border-slate-800 rounded-xl p-6 min-h-[160px] flex flex-col items-center justify-center text-center space-y-2">
+                        <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center text-2xl shadow-inner">
+                          🖼️
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-semibold text-slate-300 font-mono">Image Paper Preview Area</h4>
+                          <p className="text-xs text-slate-500 mt-0.5 max-w-sm font-mono leading-relaxed">
+                            Upload image pages using the dropzone above to generate a visual document preview.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <button
@@ -1754,7 +2258,12 @@ export default class ExamDashboard extends React.Component {
                         <input
                           type="text"
                           value={studentRoll}
-                          onChange={(e) => this.setState({ studentRoll: e.target.value })}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            this.setState({ studentRoll: val });
+                            this.fetchStudentPhoto(val);
+                          }}
+                          onBlur={() => this.fetchStudentPhoto(this.state.studentRoll)}
                           className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-slate-100 font-bold focus:outline-none focus:border-emerald-500"
                           placeholder="e.g. 2026-CS-101"
                           required
@@ -1817,18 +2326,30 @@ export default class ExamDashboard extends React.Component {
                   <div className="space-y-6">
                     {/* Top Kiosk Header */}
                     <div className="bg-slate-950 border border-emerald-700 p-4 rounded-lg flex flex-wrap items-center justify-between gap-4 font-mono text-xs select-none">
-                      <div>
-                        <span className="text-emerald-400 font-bold uppercase tracking-wider block">
-                          🔴 SECURE STUDENT KIOSK READER — ACTIVE
-                        </span>
-                        <div className="flex items-center gap-3 text-slate-300 mt-1">
-                          <span>ROLL: <strong>{studentRoll}</strong></span>
-                          <span>|</span>
-                          <span>SEAT: <strong>{studentSeat}</strong></span>
-                          <span>|</span>
-                          <span>CENTER: <strong>{studentCenterCode}</strong></span>
-                          <span>|</span>
-                          <span>SUBJECT: <strong className="text-amber-400">{studentSubjectCode}</strong></span>
+                      <div className="flex items-center gap-4">
+                        {studentPhotoUrl && (
+                          <div className="relative w-10 h-14 bg-slate-900 border border-emerald-500 rounded overflow-hidden shrink-0 shadow" title="Pre-Exam Verified Candidate Photo">
+                            <img src={studentPhotoUrl} alt="Candidate Verified" className="w-full h-full object-cover" />
+                          </div>
+                        )}
+                        <div>
+                          <span className="text-emerald-400 font-bold uppercase tracking-wider block flex items-center gap-2">
+                            🔴 SECURE STUDENT KIOSK READER — ACTIVE
+                            {studentPhotoUrl && (
+                              <span className="bg-emerald-950 text-emerald-300 border border-emerald-800 text-[9px] px-1.5 py-0.5 rounded font-bold">
+                                ✓ VERIFIED PHOTO
+                              </span>
+                            )}
+                          </span>
+                          <div className="flex items-center gap-3 text-slate-300 mt-1">
+                            <span>ROLL: <strong>{studentRoll}</strong></span>
+                            <span>|</span>
+                            <span>SEAT: <strong>{studentSeat}</strong></span>
+                            <span>|</span>
+                            <span>CENTER: <strong>{studentCenterCode}</strong></span>
+                            <span>|</span>
+                            <span>SUBJECT: <strong className="text-amber-400">{studentSubjectCode}</strong></span>
+                          </div>
                         </div>
                       </div>
 
@@ -1893,110 +2414,62 @@ export default class ExamDashboard extends React.Component {
                       onPaste={this.preventStudentClipboard}
                       style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
                     >
-                      {/* Sweeping Forensic Watermark Overlay */}
-                      <div className="absolute inset-0 pointer-events-none select-none flex flex-col justify-around opacity-15 rotate-[-22deg] transform scale-125 z-30 text-[11px] text-cyan-600 font-bold tracking-widest leading-loose">
-                        {Array.from({ length: 12 }).map((_, i) => (
-                          <div key={i} className="whitespace-nowrap">
-                            STRICTLY CONFIDENTIAL — ROLL: {studentRoll} | SEAT: {studentSeat} | CENTER: {studentCenterCode} | IP: 127.0.0.1
-                          </div>
-                        ))}
-                      </div>
 
-                      {/* PDF Sheet Canvas / White Document Sheet */}
-                      <div className="bg-white text-slate-900 p-8 sm:p-10 rounded shadow-2xl border-2 border-slate-300 max-w-3xl mx-auto font-serif relative z-20 space-y-6">
-                        {/* PDF Header Seal */}
-                        <div className="text-center border-b-2 border-slate-900 pb-4 space-y-1">
-                          <div className="flex items-center justify-center gap-2 text-red-700 font-bold text-xs uppercase tracking-widest font-mono">
-                            <span>🏛️ CENTRAL UNIVERSITY EXAMINATION BOARD</span>
-                          </div>
-                          <h1 className="text-2xl font-black tracking-wide text-slate-950 uppercase font-serif">
-                            CENTRAL UNIVERSITY EXAMINATION 2026
-                          </h1>
-                          <p className="text-sm font-semibold text-slate-700 uppercase tracking-wider font-mono">
-                            ANNUAL DEGREE EXAMINATIONS — OFFICIAL QUESTION PAPER
-                          </p>
-                        </div>
 
-                        {/* PDF Metadata Grid Table */}
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 border border-slate-400 p-3 bg-slate-50 rounded text-xs font-mono text-slate-800">
-                          <div>
-                            <span className="text-slate-500 block text-[9px] uppercase font-bold">Subject Code</span>
-                            <span className="font-bold text-blue-900">{studentSubjectCode}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 block text-[9px] uppercase font-bold">Max Marks</span>
-                            <span className="font-bold text-slate-900">100 Marks</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 block text-[9px] uppercase font-bold">Time Allowed</span>
-                            <span className="font-bold text-slate-900">3.0 Hours</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 block text-[9px] uppercase font-bold">Desk / Seat ID</span>
-                            <span className="font-bold text-emerald-800">{studentSeat}</span>
-                          </div>
-                        </div>
+                      {/* Exact Uploaded PDF Document Stream, Image Pages, or Clean Question Paper Payload */}
+                      {(() => {
+                        const { dataUrl: activePdfDataUrl, text: activePaperText, pages: activePages } = this.getPaperDetails(studentPaperContent, studentSubjectCode);
+                        const displayContent = activePaperText || this.getCleanPaperContent(studentPaperContent, studentSubjectCode);
 
-                        {/* Candidate Instructions */}
-                        <div className="bg-amber-50/80 border-l-4 border-amber-500 p-3 text-xs text-slate-800 font-sans space-y-1">
-                          <p className="font-bold text-amber-900 uppercase font-mono">📌 CANDIDATE DIRECTIVES:</p>
-                          <p className="text-slate-700 leading-snug">
-                            1. Scroll to read all question sections. 2. Standalone kiosk mode active; output printing and clipboard capture are disabled.
-                          </p>
-                        </div>
-
-                        {/* Visual Uploaded PDF Document Stream */}
-                        {this.getPaperDataUrl(studentSubjectCode) && (
-                          <div className="border-2 border-slate-300 rounded-lg overflow-hidden bg-slate-100 p-2 shadow-inner my-4">
-                            <div className="bg-slate-900 text-slate-200 text-xs font-mono px-3 py-1.5 flex items-center justify-between rounded-t">
-                              <span>📄 UPLOADED PDF DOCUMENT VISUAL IMAGE STREAM</span>
-                              <span className="text-emerald-400 font-bold">● LIVE VERIFIED PDF VIEW</span>
+                        if (activePages && activePages.length > 0) {
+                          return (
+                            <div className="w-full relative z-20">
+                              <ImagePaperViewer pages={activePages} subjectCode={studentSubjectCode} title={`Official Question Paper (${studentSubjectCode})`} />
                             </div>
-                            <iframe
-                              src={this.getPaperDataUrl(studentSubjectCode)}
-                              title="Uploaded PDF Document Image Stream"
-                              className="w-full h-[650px] border-0 rounded-b bg-white"
-                            />
-                          </div>
-                        )}
+                          );
+                        }
 
-                        {/* Question Paper Content Section */}
-                        <div className="space-y-4 pt-2">
-                          <div className="border-b border-slate-300 pb-1 flex items-center justify-between text-xs font-bold font-mono text-slate-600 uppercase">
-                            <span>SECTION A — MAIN EXAMINATION QUESTIONS</span>
-                            <span>[ TOTAL MARKS: 100 ]</span>
-                          </div>
+                        if (activePdfDataUrl) {
+                          return (
+                            <div className="w-full relative z-20">
+                              <PdfCanvasViewer pdfDataUrl={activePdfDataUrl} />
+                            </div>
+                          );
+                        }
 
-                          <div className="space-y-3 font-sans text-slate-900 text-sm leading-relaxed">
-                            {this.getCleanPaperContent(studentPaperContent, studentSubjectCode)
-                              .split('\n')
-                              .map((line, idx) => {
-                                const trimmed = line.trim();
-                                if (!trimmed) return null;
-                                if (trimmed.startsWith('CONFIDENTIAL') || trimmed.startsWith('Subject:') || trimmed.startsWith('Max Marks:')) {
-                                  return (
-                                    <div key={idx} className="bg-slate-100 text-slate-800 font-mono text-xs font-bold p-2.5 rounded border border-slate-300">
-                                      {trimmed}
-                                    </div>
-                                  );
-                                }
-                                return (
-                                  <div key={idx} className="p-4 bg-slate-50 rounded-lg border border-slate-200 shadow-sm space-y-1 hover:border-slate-300 transition-colors">
-                                    <p className="font-medium text-slate-900 leading-normal">
-                                      {trimmed}
-                                    </p>
-                                  </div>
-                                );
-                              })}
-                          </div>
-                        </div>
+                        return (
+                          <div className="bg-slate-900/90 text-slate-100 p-6 sm:p-8 rounded-xl shadow-2xl border border-slate-800 max-w-4xl mx-auto font-sans relative z-20 space-y-6">
+                            {/* Header Badge */}
+                            <div className="border-b border-slate-800 pb-4 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+                              <div className="flex items-center gap-2">
+                                <span className="bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2.5 py-1 rounded font-bold uppercase tracking-wider">
+                                  📄 OFFICIAL QUESTION PAPER ({studentSubjectCode})
+                                </span>
+                                <span className="text-slate-400">| Seat: {studentSeat}</span>
+                              </div>
+                              <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2.5 py-0.5 rounded font-bold uppercase text-[10px]">
+                                ● DECRYPTED & VERIFIED
+                              </span>
+                            </div>
 
-                        {/* PDF Footer Stamps */}
-                        <div className="border-t-2 border-slate-900 pt-4 flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono text-slate-600">
-                          <span>END OF QUESTION PAPER — PAGE 1 / 1</span>
-                          <span>DIGITALLY SIGNED & TIME-LOCKED 🔒</span>
-                        </div>
-                      </div>
+                            {/* Question Content Display */}
+                            <div className="space-y-4 pt-2">
+                              <div className="text-xs font-mono font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1">
+                                SECTION A — EXAMINATION QUESTIONS & INSTRUCTIONS
+                              </div>
+                              <div className="bg-slate-950 p-5 rounded-lg border border-slate-800 font-mono text-sm leading-relaxed text-slate-200 whitespace-pre-wrap shadow-inner">
+                                {displayContent || 'No question paper payload loaded.'}
+                              </div>
+                            </div>
+
+                            {/* Document Footer */}
+                            <div className="border-t border-slate-800 pt-4 flex items-center justify-between text-[11px] font-mono text-slate-500">
+                              <span>END OF QUESTION PAPER PAYLOAD</span>
+                              <span>SECURITY TIME-LOCKED 🔒</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {/* Focus Lost Security Warning Modal */}
@@ -2047,8 +2520,7 @@ export default class ExamDashboard extends React.Component {
                   🔒 SYSTEM STATUS: SECURE & LOCKED
                 </div>
                 <div className="space-y-2">
-                  <p className="text-sm text-slate-400">Subject: CS-602 (Database Management Systems)</p>
-                  <p className="text-sm text-slate-400">Hardware Fingerprint: MAC Verified (A1:B2:C3:D4:E5:F6)</p>
+                  {subjectCode ? <p className="text-sm text-slate-400">Subject: <span className="text-cyan-400 font-mono font-bold">{subjectCode}</span></p> : null}
                 </div>
                 <div className="bg-slate-950 p-6 rounded-lg border border-slate-800 max-w-md mx-auto">
                   <p className="text-xs text-slate-500 uppercase tracking-wider mb-2">Time-Lock Countdown</p>
@@ -2063,7 +2535,72 @@ export default class ExamDashboard extends React.Component {
             )}
 
             {!isUnlocked && countdown === 0 && (
-              <div className="max-w-md mx-auto py-6 space-y-6">
+              <div className="max-w-2xl mx-auto py-6 space-y-6">
+                {/* AI Scheduled Exams Queue Section */}
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-3 font-mono shadow-lg">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <div className="flex items-center gap-2 text-cyan-400 font-bold text-sm">
+                      <span>🤖 AI AGENT EXAM SCHEDULER QUEUE (CENTER: {centerCode})</span>
+                    </div>
+                    <button
+                      onClick={this.loadScheduledExams}
+                      className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-2.5 py-1 rounded border border-slate-700"
+                    >
+                      🔄 SYNC SCHEDULES
+                    </button>
+                  </div>
+
+                  {scheduledExamsList.length === 0 ? (
+                    <div className="p-3 text-xs text-slate-400 text-center italic">
+                      No AI-scheduled exams found for center {centerCode}. You can manually enter subject code below.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {scheduledExamsList.map((ex) => (
+                        <div
+                          key={ex.schedule_id || ex.subject_code}
+                          className={`p-3 rounded-lg border flex flex-wrap items-center justify-between gap-3 text-xs ${
+                            subjectCode.toUpperCase() === ex.subject_code.toUpperCase()
+                              ? 'bg-cyan-950/60 border-cyan-500 text-cyan-200'
+                              : 'bg-slate-900 border-slate-800 text-slate-300'
+                          }`}
+                        >
+                          <div className="space-y-0.5">
+                            <div className="font-bold text-sm text-slate-100 flex items-center gap-2">
+                              {ex.subject_code}
+                              <span className="text-[10px] bg-slate-800 text-amber-400 border border-slate-700 px-1.5 py-0.5 rounded font-mono">
+                                {ex.scheduled_by || 'AI_AGENT'}
+                              </span>
+                            </div>
+                            <div className="text-slate-400 text-[11px]">
+                              📅 {ex.exam_date} at {ex.exam_time || '10:00 AM'} ({ex.duration_mins} mins)
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              ex.status === 'PUBLISHED_TO_STUDENTS'
+                                ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                                : ex.status === 'SUPERVISOR_UNLOCKED'
+                                ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                                : 'bg-slate-800 text-cyan-300 border border-slate-700'
+                            }`}>
+                              ● {ex.status || 'SCHEDULED'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => this.setState({ subjectCode: ex.subject_code })}
+                              className="bg-cyan-700 hover:bg-cyan-600 text-slate-950 px-2.5 py-1 rounded text-xs font-bold font-mono"
+                            >
+                              SELECT SUBJECT
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 <div className="text-center space-y-2">
                   <span className="text-emerald-400 font-mono text-sm">[🔑 EXAMINATION WINDOW OPEN]</span>
                   <h2 className="text-xl font-semibold">Dual-Key Multi-Party Authorization Required</h2>
@@ -2072,7 +2609,7 @@ export default class ExamDashboard extends React.Component {
                   </p>
                 </div>
 
-                <form onSubmit={this.handleDecrypt} className="space-y-4">
+                <form onSubmit={this.handleDecrypt} className="space-y-4 font-sans">
                   <div>
                     <label htmlFor="supervisor-username" className="block text-xs uppercase tracking-wider text-slate-400 mb-1">Supervisor Username</label>
                     <input
@@ -2152,18 +2689,27 @@ export default class ExamDashboard extends React.Component {
                 </div>
 
                 <div className="bg-slate-950 border border-emerald-800 text-emerald-400 px-4 py-2 rounded text-xs font-mono flex justify-between items-center">
-                  <span>FORENSIC WATERMARK: CTR-101 | DEV-MAC:A1:B2:C3 | IP:127.0.0.1 | UNLOCKED: {unlockedTimestamp || 'LIVE'}</span>
+                  <span>FORENSIC WATERMARK: CTR-101 | IP:127.0.0.1 | UNLOCKED: {unlockedTimestamp || 'LIVE'}</span>
                 </div>
 
                 {/* Direct Student Transmission Confirmation Card (Question Paper Text Hidden From Supervisor) */}
                 <div className="bg-emerald-950/60 border border-emerald-800 p-6 rounded-xl space-y-4 font-mono shadow-lg">
                   <div className="flex items-center justify-between border-b border-emerald-900/80 pb-3 flex-wrap gap-2">
                     <div className="flex items-center gap-2 text-emerald-400 font-bold text-base">
-                      <span>✅ QUESTION PAPER DECRYPTED & TRANSMITTED DIRECTLY TO STUDENT TERMINALS</span>
+                      <span>✅ QUESTION PAPER DECRYPTED SUCCESSFULLY</span>
                     </div>
-                    <span className="bg-emerald-900 text-emerald-300 border border-emerald-700 px-3 py-1 rounded font-bold text-xs">
-                      ● TRANSMITTED TO HALL DESKS
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={this.handlePublishToStudents}
+                        disabled={this.state.publishLoading}
+                        className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-950 text-slate-950 px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 shadow-lg transition-all"
+                      >
+                        🚀 {this.state.publishLoading ? 'PUBLISHING TO HALL...' : this.state.publishSuccess ? '✓ PUBLISHED TO STUDENT APP' : 'PUBLISH PAPER TO STUDENT APP'}
+                      </button>
+                      <span className="bg-emerald-900 text-emerald-300 border border-emerald-700 px-3 py-1 rounded font-bold text-xs">
+                        ● READY FOR TRANSMISSION
+                      </span>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs text-slate-300 bg-slate-950 p-4 rounded-lg border border-slate-800">

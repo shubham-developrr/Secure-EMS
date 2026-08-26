@@ -91,6 +91,18 @@ describe('ExamDashboard Auto-Logout Timer', () => {
           });
         }
 
+        if (String(url).includes('/api/student/verification/')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              verified: true,
+              roll_number: '2026-CS-101',
+              captured_image_base64: 'data:image/jpeg;base64,mockImage',
+              status: 'VERIFIED',
+            }),
+          });
+        }
+
         if (String(url).includes('/api/decrypt')) {
           return Promise.resolve({
             ok: true,

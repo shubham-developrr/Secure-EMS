@@ -55,31 +55,31 @@ describe('AdminTerminal Component', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renders admin terminal header, PDF upload input, and PDF visual preview area', async () => {
+  it('renders admin terminal header, Image upload input, and Image preview area', async () => {
     await act(async () => {
       render(React.createElement(AdminTerminal));
     });
 
     expect(screen.getByText(/CENTRAL ADMIN TERMINAL/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/subject code/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/upload question paper pdf/i)).toBeInTheDocument();
-    expect(screen.getByText(/PDF Visual Preview Area/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Upload Question Paper Images/i)).toBeInTheDocument();
+    expect(screen.getByText(/Image Paper Preview Area/i)).toBeInTheDocument();
   });
 
-  it('handles PDF file upload and updates paper content', async () => {
+  it('handles image page file upload and updates paper content', async () => {
     await act(async () => {
       render(React.createElement(AdminTerminal));
     });
 
-    const pdfInput = screen.getByLabelText(/upload question paper pdf/i);
-    const mockPdfFile = new File(['(CONFIDENTIAL QUESTION PAPER CONTENT) Tj'], 'math_201_exam.pdf', {
-      type: 'application/pdf',
+    const imageInput = screen.getByLabelText(/Upload Question Paper Image Pages/i);
+    const mockImageFile = new File(['fake image page data'], 'math_201_exam.png', {
+      type: 'image/png',
     });
 
-    fireEvent.change(pdfInput, { target: { files: [mockPdfFile] } });
+    fireEvent.change(imageInput, { target: { files: [mockImageFile] } });
 
     await waitFor(() => {
-      expect(screen.getByText(/Uploaded PDF: math_201_exam.pdf/i)).toBeInTheDocument();
+      expect(screen.getByText(/Question Paper Pages \(1 Pages Uploaded\)/i)).toBeInTheDocument();
     });
   });
 
@@ -97,5 +97,24 @@ describe('AdminTerminal Component', () => {
 
     expect(screen.getByText(/Question paper encrypted with 2-stage split authority locks/i)).toBeInTheDocument();
     expect(screen.getByText(/CTRL-KEY-TEST-999/i)).toBeInTheDocument();
+  });
+
+  it('switches to Pagewise Image Upload mode and uploads image pages', async () => {
+    await act(async () => {
+      render(React.createElement(AdminTerminal));
+    });
+
+    expect(screen.getByLabelText(/Upload Question Paper Images/i)).toBeInTheDocument();
+
+    const imageInput = screen.getByLabelText(/Upload Question Paper Image Pages/i);
+    const mockImage1 = new File(['fake image page 1'], 'page1.png', { type: 'image/png' });
+    const mockImage2 = new File(['fake image page 2'], 'page2.png', { type: 'image/png' });
+
+    fireEvent.change(imageInput, { target: { files: [mockImage1, mockImage2] } });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Question Paper Pages \(2 Pages Uploaded\)/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/PAGE 1/i).length).toBeGreaterThan(0);
+    });
   });
 });

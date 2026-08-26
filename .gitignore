@@ -29,6 +29,7 @@ __pycache__/
 
 # Databases & Encrypted Test Files
 *.db
+*.db-journal
 *.enc
 
 # PDF Reports & Local Scripts (Never publish to GitHub)
