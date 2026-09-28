@@ -2,7 +2,8 @@ import sqlite3
 import hashlib
 from datetime import datetime, timedelta
 
-DB_NAME = "exam_system.db"
+import db_config
+DB_NAME = db_config.get_db_path("exam_system.db")
 DEFAULT_CENTER_PIN = "246810"
 
 

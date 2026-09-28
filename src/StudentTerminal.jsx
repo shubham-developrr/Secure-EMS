@@ -2,7 +2,7 @@ import React from 'react';
 import PdfCanvasViewer from './PdfCanvasViewer.jsx';
 import ImagePaperViewer from './ImagePaperViewer.jsx';
 
-const API_BASE = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1' ? '' : 'http://127.0.0.1:8000');
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
 const ensurePdfBlobUrl = (content) => {
   if (!content || typeof content !== 'string') return '';

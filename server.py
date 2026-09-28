@@ -140,7 +140,8 @@ except ImportError:
     app = MockApp()
     Request = None
 
-DB_NAME = "exam_system.db"
+import db_config
+DB_NAME = db_config.get_db_path("exam_system.db")
 
 class DecryptRequest(BaseModel):
     username: str
@@ -1458,6 +1459,12 @@ def get_dashboard_personnel_status():
         }
 
 if __name__ == "__main__":
+    try:
+        import database_setup
+        database_setup.initialize_database()
+    except Exception as e:
+        print("Failed to initialize database:", e)
+        
     try:
         import uvicorn
         print("Starting FastAPI server on http://localhost:8000 ...")

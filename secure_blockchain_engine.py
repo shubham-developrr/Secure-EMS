@@ -4,13 +4,69 @@ import time
 import os
 import sqlite3
 from typing import Dict, Any, List, Optional, Tuple
+from web3 import Web3
+from dotenv import load_dotenv
 
-LEDGER_DB = "blockchain_ledger.db"
+import db_config
+LEDGER_DB = db_config.get_db_path("blockchain_ledger.db")
+
+load_dotenv()
+
+# Web3 Configuration
+POLYGON_RPC_URL = os.getenv("POLYGON_RPC_URL", "https://rpc-amoy.polygon.technology")
+PRIVATE_KEY = os.getenv("PRIVATE_KEY")
+CONTRACT_ADDRESS = os.getenv("CONTRACT_ADDRESS")
+
+# Minimal ABI for AuditLedger
+CONTRACT_ABI = [
+    {
+      "inputs": [{"internalType": "string", "name": "logId", "type": "string"}, {"internalType": "bytes32", "name": "payloadHash", "type": "bytes32"}],
+      "name": "anchorLog",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [{"internalType": "string", "name": "logId", "type": "string"}],
+      "name": "hasRecord",
+      "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [{"internalType": "string", "name": "logId", "type": "string"}, {"internalType": "bytes32", "name": "payloadHash", "type": "bytes32"}],
+      "name": "verifyLog",
+      "outputs": [
+        {"internalType": "bool", "name": "isMatch", "type": "bool"},
+        {"internalType": "uint256", "name": "timestamp", "type": "uint256"},
+        {"internalType": "address", "name": "anchorer", "type": "address"}
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+]
 
 class SecureBlockchainEngine:
     def __init__(self, db_path: str = LEDGER_DB):
         self.db_path = db_path
         self._init_ledger_db()
+        self._init_web3()
+
+    def _init_web3(self):
+        self.use_real_blockchain = False
+        try:
+            self.w3 = Web3(Web3.HTTPProvider(POLYGON_RPC_URL))
+            if self.w3.is_connected() and PRIVATE_KEY and CONTRACT_ADDRESS:
+                self.account = self.w3.eth.account.from_key(PRIVATE_KEY)
+                self.contract = self.w3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
+                self.use_real_blockchain = True
+                print(f"Web3 Connected to Polygon. Address: {self.account.address}")
+            else:
+                print("Web3 NOT fully configured. Falling back to LOCAL MOCK mode.")
+                print("Make sure POLYGON_RPC_URL, PRIVATE_KEY, and CONTRACT_ADDRESS are set in .env")
+        except Exception as e:
+            print(f"Web3 initialization failed: {e}. Falling back to LOCAL MOCK mode.")
+
 
     def _get_connection(self):
         return sqlite3.connect(self.db_path)
@@ -115,9 +171,38 @@ class SecureBlockchainEngine:
         header_str = f"{new_block_num}_{last_block_hash}_{merkle_root}_{now_time}"
         block_hash = "0x" + hashlib.sha256(header_str.encode('utf-8')).hexdigest()
 
-        # Calculate transaction hash (0x...)
-        tx_str = f"{record_id}:{payload_hash}:{new_block_num}:{now_time}:{actor}"
-        tx_hash = "0x" + hashlib.sha256(tx_str.encode('utf-8')).hexdigest()
+        if self.use_real_blockchain:
+            try:
+                # Prepare the transaction
+                nonce = self.w3.eth.get_transaction_count(self.account.address)
+                payload_bytes32 = Web3.to_bytes(hexstr=payload_hash)
+                
+                tx = self.contract.functions.anchorLog(record_id, payload_bytes32).build_transaction({
+                    'chainId': 80002, # Amoy chain ID
+                    'gas': 300000,
+                    'gasPrice': self.w3.eth.gas_price,
+                    'nonce': nonce,
+                })
+                
+                # Sign the transaction
+                signed_tx = self.w3.eth.account.sign_transaction(tx, private_key=PRIVATE_KEY)
+                
+                # Send the transaction
+                tx_hash_bytes = self.w3.eth.send_raw_transaction(signed_tx.rawTransaction) # Changed to rawTransaction
+                tx_hash = self.w3.to_hex(tx_hash_bytes)
+                
+                # Wait for confirmation (optional but good for consistency)
+                receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash_bytes)
+                actor = self.account.address
+            except Exception as e:
+                print(f"Failed to anchor to real blockchain: {e}")
+                # Fallback to local
+                tx_str = f"{record_id}:{payload_hash}:{new_block_num}:{now_time}:{actor}"
+                tx_hash = "0x" + hashlib.sha256(tx_str.encode('utf-8')).hexdigest()
+        else:
+            # Calculate local mock transaction hash (0x...)
+            tx_str = f"{record_id}:{payload_hash}:{new_block_num}:{now_time}:{actor}"
+            tx_hash = "0x" + hashlib.sha256(tx_str.encode('utf-8')).hexdigest()
 
         # Insert new block
         cursor.execute("""
@@ -180,6 +265,17 @@ class SecureBlockchainEngine:
         tx_hash, anchored_hash, block_num, timestamp, block_hash, anchorer = row
 
         is_match = (anchored_hash.lower() == current_hash.lower())
+        
+        # If real blockchain is used, verify against the smart contract
+        if self.use_real_blockchain and is_match:
+            try:
+                payload_bytes32 = Web3.to_bytes(hexstr=current_hash)
+                match_on_chain, chain_timestamp, chain_anchorer = self.contract.functions.verifyLog(record_id, payload_bytes32).call()
+                is_match = is_match and match_on_chain
+                anchorer = chain_anchorer
+            except Exception as e:
+                print(f"Failed to verify on real blockchain: {e}")
+                # We still keep the local is_match status if on-chain fails
 
         return {
             "verified": is_match,

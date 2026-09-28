@@ -8,7 +8,9 @@
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "vitest"
+    "test": "vitest",
+    "start": "electron .",
+    "build:electron": "electron-builder"
   },
   "dependencies": {
     "react": "^19.2.7",
@@ -23,6 +25,30 @@
     "oxlint": "^1.71.0",
     "vite": "^8.1.1",
     "vitest": "^3.2.4",
-    "jsdom": "^26.1.0"
+    "jsdom": "^26.1.0",
+    "electron": "^29.1.0",
+    "electron-builder": "^24.13.3"
+  },
+  "main": "main.cjs",
+  "build": {
+    "appId": "com.secureems.app",
+    "productName": "Secure EMS",
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "extraResources": [
+      {
+        "from": "dist-backend",
+        "to": "dist-backend",
+        "filter": ["**/*"]
+      }
+    ],
+    "files": [
+      "dist/**/*",
+      "main.cjs"
+    ]
   }
 }

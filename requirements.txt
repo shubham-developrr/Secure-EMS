@@ -3,3 +3,5 @@ uvicorn
 pydantic
 cryptography
 httpx
+web3
+python-dotenv
