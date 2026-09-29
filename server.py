@@ -317,6 +317,10 @@ def log_audit_event(user_id=None, center_id=None, action_type="AUDIT_EVENT", det
             cursor.execute("ALTER TABLE audit_logs ADD COLUMN previous_hash TEXT;")
         if "current_hash" not in columns:
             cursor.execute("ALTER TABLE audit_logs ADD COLUMN current_hash TEXT;")
+        if "blockchain_tx_hash" not in columns:
+            cursor.execute("ALTER TABLE audit_logs ADD COLUMN blockchain_tx_hash TEXT;")
+        if "on_chain_status" not in columns:
+            cursor.execute("ALTER TABLE audit_logs ADD COLUMN on_chain_status TEXT;")
 
         # Fetch last log's hash for SHA-256 cryptographic chaining
         last_row = cursor.execute("SELECT current_hash FROM audit_logs ORDER BY log_id DESC LIMIT 1").fetchone()
@@ -413,7 +417,7 @@ def upload_question_paper(payload: PaperUploadRequest, request: Request):
         "blockchain_tx_hash": tx_hash,
         "paper_hash": paper_hash,
         "on_chain_status": "CONFIRMED",
-        "explorer_url": f"https://amoy.polygonscan.com/tx/{tx_hash}",
+        "explorer_url": bc_receipt.get("explorer_url") or "",
         "message": f"Successfully uploaded paper {clean_subject} & anchored on Blockchain (Tx: {tx_hash[:10]}...)."
     }
 

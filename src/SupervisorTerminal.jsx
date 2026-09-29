@@ -230,8 +230,8 @@ export default class SupervisorTerminal extends React.Component {
           tx_hash: mockTx,
           anchored_payload_hash: mockHash,
           block_number: 10842,
-          status: 'CONFIRMED',
-          explorer_url: `https://amoy.polygonscan.com/tx/${mockTx}`,
+          status: 'CONFIRMED (LOCAL MOCK)',
+          explorer_url: "",
         },
       });
     } finally {

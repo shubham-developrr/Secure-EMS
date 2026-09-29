@@ -43,6 +43,37 @@ CONTRACT_ABI = [
       ],
       "stateMutability": "view",
       "type": "function"
+    },
+    {
+      "anonymous": False,
+      "inputs": [
+        {
+          "indexed": True,
+          "internalType": "string",
+          "name": "id",
+          "type": "string"
+        },
+        {
+          "indexed": True,
+          "internalType": "bytes32",
+          "name": "hash",
+          "type": "bytes32"
+        },
+        {
+          "indexed": False,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        },
+        {
+          "indexed": True,
+          "internalType": "address",
+          "name": "anchorer",
+          "type": "address"
+        }
+      ],
+      "name": "LogAnchored",
+      "type": "event"
     }
 ]
 
@@ -60,7 +91,7 @@ class SecureBlockchainEngine:
                 self.account = self.w3.eth.account.from_key(PRIVATE_KEY)
                 self.contract = self.w3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
                 self.use_real_blockchain = True
-                print(f"Web3 Connected to Polygon. Address: {self.account.address}")
+                print(f"Web3 Connected to Polygon Amoy Testnet. Address: {self.account.address}")
             else:
                 print("Web3 NOT fully configured. Falling back to LOCAL MOCK mode.")
                 print("Make sure POLYGON_RPC_URL, PRIVATE_KEY, and CONTRACT_ADDRESS are set in .env")
@@ -178,8 +209,7 @@ class SecureBlockchainEngine:
                 payload_bytes32 = Web3.to_bytes(hexstr=payload_hash)
                 
                 tx = self.contract.functions.anchorLog(record_id, payload_bytes32).build_transaction({
-                    'chainId': 80002, # Amoy chain ID
-                    'gas': 300000,
+                    'chainId': 80002, # Polygon Amoy Testnet chain ID
                     'gasPrice': self.w3.eth.gas_price,
                     'nonce': nonce,
                 })
@@ -188,7 +218,7 @@ class SecureBlockchainEngine:
                 signed_tx = self.w3.eth.account.sign_transaction(tx, private_key=PRIVATE_KEY)
                 
                 # Send the transaction
-                tx_hash_bytes = self.w3.eth.send_raw_transaction(signed_tx.rawTransaction) # Changed to rawTransaction
+                tx_hash_bytes = self.w3.eth.send_raw_transaction(signed_tx.raw_transaction)
                 tx_hash = self.w3.to_hex(tx_hash_bytes)
                 
                 # Wait for confirmation (optional but good for consistency)
@@ -227,7 +257,7 @@ class SecureBlockchainEngine:
             "block_hash": block_hash,
             "timestamp": now_time,
             "status": "CONFIRMED",
-            "explorer_url": f"https://amoy.polygonscan.com/tx/{tx_hash}",
+            "explorer_url": f"https://amoy.polygonscan.com/tx/{tx_hash}" if self.use_real_blockchain else "",
             "already_anchored": False
         }
 
@@ -287,7 +317,7 @@ class SecureBlockchainEngine:
             "timestamp": timestamp,
             "anchored_by": anchorer,
             "status": "CONFIRMED" if is_match else "INTEGRITY_TAMPERED",
-            "explorer_url": f"https://amoy.polygonscan.com/tx/{tx_hash}"
+            "explorer_url": f"https://amoy.polygonscan.com/tx/{tx_hash}" if self.use_real_blockchain else ""
         }
 
     def get_recent_blocks(self, limit: int = 10) -> List[Dict[str, Any]]:
@@ -315,9 +345,85 @@ class SecureBlockchainEngine:
                 "timestamp": r[4],
                 "status": r[5],
                 "block_hash": r[6],
-                "explorer_url": f"https://amoy.polygonscan.com/tx/{r[0]}"
+                "explorer_url": f"https://amoy.polygonscan.com/tx/{r[0]}" if self.use_real_blockchain else ""
             })
         return records
+
+    def sync_from_global_chain(self, from_block: int = 0) -> int:
+        """
+        Recovers the local ledger by fetching all anchoring events from the global smart contract.
+        Useful when local SQLite database is deleted, corrupted, or when syncing a new node.
+        """
+        if not self.use_real_blockchain:
+            print("Web3 not configured. Cannot sync from global chain.")
+            return 0
+            
+        print(f"Syncing from global blockchain starting at block {from_block}...")
+        
+        try:
+            # Get all LogAnchored events
+            event_filter = self.contract.events.LogAnchored.create_filter(fromBlock=from_block, toBlock='latest')
+            events = event_filter.get_all_entries()
+        except Exception as e:
+            print(f"Failed to fetch events from global chain: {e}")
+            return 0
+            
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        recovered_count = 0
+        for event in events:
+            tx_hash = self.w3.to_hex(event['transactionHash'])
+            
+            # Retrieve transaction to decode input for original string logId
+            # Since string is indexed, the event only contains Keccak256 hash of the string
+            try:
+                tx = self.w3.eth.get_transaction(tx_hash)
+                func_obj, func_params = self.contract.decode_function_input(tx.input)
+                record_id = func_params.get('logId')
+            except Exception as e:
+                print(f"Failed to decode transaction {tx_hash} for record_id: {e}")
+                continue
+                
+            payload_hash = self.w3.to_hex(event['args']['hash'])
+            timestamp = event['args']['timestamp']
+            anchorer = event['args']['anchorer']
+            
+            # Check if this record already exists in our local DB
+            cursor.execute("SELECT * FROM anchored_records WHERE record_id = ?", (record_id,))
+            if cursor.fetchone():
+                continue # Already have it locally
+                
+            # Create a mock block sequentially to store this global transaction locally
+            cursor.execute("SELECT block_number, block_hash FROM blocks ORDER BY block_number DESC LIMIT 1;")
+            row = cursor.fetchone()
+            last_block_num = row[0] if row else 0
+            last_block_hash = row[1] if row else ("0x" + "0" * 64)
+            
+            new_block_num = last_block_num + 1
+            merkle_root = hashlib.sha256(f"{record_id}:{payload_hash}:{timestamp}".encode('utf-8')).hexdigest()
+            header_str = f"{new_block_num}_{last_block_hash}_{merkle_root}_{timestamp}"
+            block_hash = "0x" + hashlib.sha256(header_str.encode('utf-8')).hexdigest()
+            
+            # Insert block
+            cursor.execute("""
+            INSERT INTO blocks (block_number, prev_block_hash, block_hash, merkle_root, timestamp, nonce)
+            VALUES (?, ?, ?, ?, ?, ?);
+            """, (new_block_num, last_block_hash, block_hash, merkle_root, timestamp, 1337))
+            
+            # Insert record
+            cursor.execute("""
+            INSERT INTO anchored_records (tx_hash, record_id, payload_hash, block_number, timestamp, anchored_by, on_chain_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            """, (tx_hash, record_id, payload_hash, new_block_num, timestamp, anchorer, "RECOVERED_FROM_CHAIN"))
+            
+            recovered_count += 1
+            
+        conn.commit()
+        conn.close()
+        
+        print(f"Successfully recovered {recovered_count} records from the global blockchain.")
+        return recovered_count
 
 # Singleton instance
 blockchain_engine = SecureBlockchainEngine()

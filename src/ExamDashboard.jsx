@@ -1543,7 +1543,7 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                               <td className="p-3 font-bold text-cyan-300">{block.record_id}</td>
                               <td className="p-3">
                                 <a
-                                  href={block.explorer_url}
+                                  href={block.explorer_url || `https://amoy.polygonscan.com/tx/${block.tx_hash}`}
                                   target="_blank"
                                   rel="noreferrer"
                                   className="text-purple-300 hover:underline font-bold"
