@@ -24,7 +24,7 @@ function createWindow() {
     // In dev, assuming Vite is running on localhost:5173
     // But for this setup, we can also just load the dist folder if it's built
     mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html')).catch(() => {
-        mainWindow.loadURL('http://localhost:5173');
+      mainWindow.loadURL('http://localhost:5173');
     });
   } else {
     // In production, load the built React app from the dist folder
@@ -38,18 +38,18 @@ function createWindow() {
 
 function startPythonBackend() {
   const isDev = !app.isPackaged;
-  
+
   if (isDev) {
     console.log("Starting python backend from source...");
     pythonProcess = spawn('python', ['server.py'], {
-      cwd: __dirname
+      cwd: path.join(__dirname, '../backend')
     });
   } else {
     console.log("Starting packaged python backend...");
     // Assuming PyInstaller builds the executable in dist/server/server.exe
-    const executablePath = path.join(__dirname, 'dist-backend', 'server.exe'); 
+    const executablePath = path.join(__dirname, '../backend/dist-backend', 'server.exe');
     pythonProcess = spawn(executablePath, [], {
-      cwd: __dirname
+      cwd: path.join(__dirname, '../backend')
     });
   }
 
@@ -68,7 +68,7 @@ function startPythonBackend() {
 
 app.on('ready', () => {
   startPythonBackend();
-  
+
   // Wait a moment for the backend to start up
   setTimeout(createWindow, 2000);
 });

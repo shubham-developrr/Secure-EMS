@@ -16,6 +16,8 @@ def build_executable():
         "--hidden-import", "fastapi",
         "--hidden-import", "uvicorn",
         "--hidden-import", "pydantic",
+        "--distpath", "dist-backend",
+        "--workpath", "build",
         "server.py"
     ]
     

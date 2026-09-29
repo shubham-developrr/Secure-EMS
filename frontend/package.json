@@ -41,9 +41,11 @@
     },
     "extraResources": [
       {
-        "from": "dist-backend",
+        "from": "../backend/dist-backend",
         "to": "dist-backend",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "files": [
