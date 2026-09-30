@@ -98,5 +98,6 @@ def connect(database, timeout=5.0):
     dsn = os.environ.get('DATABASE_URL')
     if not dsn:
         raise Exception('DATABASE_URL not found in environment.')
+    dsn = dsn.strip()
     return PostgresWrapper(dsn, timeout)
 
