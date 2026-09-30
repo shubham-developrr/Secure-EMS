@@ -13,9 +13,9 @@ LEDGER_DB = db_config.get_db_path("blockchain_ledger.db")
 load_dotenv()
 
 # Web3 Configuration
-POLYGON_RPC_URL = os.getenv("POLYGON_RPC_URL", "https://rpc-amoy.polygon.technology")
-PRIVATE_KEY = os.getenv("PRIVATE_KEY")
-CONTRACT_ADDRESS = os.getenv("CONTRACT_ADDRESS")
+POLYGON_RPC_URL = os.getenv("POLYGON_RPC_URL", "https://rpc-amoy.polygon.technology").strip()
+PRIVATE_KEY = os.getenv("PRIVATE_KEY").strip() if os.getenv("PRIVATE_KEY") else None
+CONTRACT_ADDRESS = os.getenv("CONTRACT_ADDRESS").strip() if os.getenv("CONTRACT_ADDRESS") else None
 
 # Minimal ABI for AuditLedger
 CONTRACT_ABI = [
