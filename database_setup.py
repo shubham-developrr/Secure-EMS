@@ -1,4 +1,4 @@
-import sqlite3
+import db_connector as sqlite3
 import os
 import hashlib
 
