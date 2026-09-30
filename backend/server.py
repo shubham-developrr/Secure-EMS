@@ -1,8 +1,9 @@
 import os
-import sqlite3
 import hashlib
 import base64
 from typing import Optional
+from cloud_db_driver import get_db_connection
+from cloud_storage_driver import save_file_to_cloud, load_file_from_cloud
 from datetime import datetime, timedelta
 from secure_blockchain_engine import blockchain_engine
 
@@ -98,11 +99,23 @@ def decrypt_question_paper(encrypted_data: bytes, sup_key: str, adm_key: str) ->
 
     raise ValueError("Cryptographic decryption failed: unable to decrypt question paper with provided keys.")
 
+import traceback
+
 try:
     from fastapi import FastAPI, HTTPException, Request, status
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel
+    from fastapi.responses import JSONResponse
+
     app = FastAPI(title="Secure EMS Backend", version="1.0")
+
+    @app.exception_handler(Exception)
+    async def global_exception_handler(request: Request, exc: Exception):
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"CRASH: {str(exc)}\n\nTRACE: {traceback.format_exc()}"}
+        )
+        
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -217,10 +230,8 @@ ACTIVE_STUDENT_SESSIONS = {}
 def hash_pin(pin: str) -> str:
     return hashlib.sha256(pin.encode("utf-8")).hexdigest()
 
-def get_db_connection():
-    conn = sqlite3.connect(DB_NAME, timeout=5.0)
-    conn.row_factory = sqlite3.Row
-    return conn
+# Database Driver natively injected from cloud_db_driver
+# def get_db_connection() is gracefully inherited.
 
 def ensure_scheduled_exams_table(cursor):
     cursor.execute(
@@ -370,8 +381,7 @@ def upload_question_paper(payload: PaperUploadRequest, request: Request):
 
     clean_subject = payload.subject_code.strip().upper()
     file_path = f"{clean_subject.lower()}_encrypted.enc"
-    with open(file_path, "wb") as f:
-        f.write(stage2_bytes)
+    save_file_to_cloud(file_path, stage2_bytes)
 
     # 3. Schedule unlock time
     scheduled_time = (datetime.now() + timedelta(seconds=payload.delay_seconds)).strftime("%Y-%m-%d %H:%M:%S")
@@ -388,7 +398,7 @@ def upload_question_paper(payload: PaperUploadRequest, request: Request):
 
     cursor.execute("SELECT user_id FROM users WHERE username = ?", (payload.uploader_username,))
     user_row = cursor.fetchone()
-    user_id = user_row["user_id"] if user_row else 1
+    user_id = user_row["user_id"] if user_row else None
 
     cursor.execute("DELETE FROM question_papers WHERE subject_code = ?", (clean_subject,))
     cursor.execute(
@@ -454,15 +464,13 @@ def verify_paper_on_chain(payload: BlockchainVerifyRequest):
         }
 
     file_path = row["encrypted_file_path"]
-    if not os.path.exists(file_path):
+    file_bytes = load_file_from_cloud(file_path)
+    if not file_bytes:
         return {
             "verified": False,
             "reason": "FILE_MISSING",
-            "details": f"Local encrypted file '{file_path}' is missing."
+            "details": f"Encrypted file '{file_path}' is missing from cloud storage."
         }
-
-    with open(file_path, "rb") as f:
-        file_bytes = f.read()
 
     result = blockchain_engine.verify_record(record_id, file_bytes)
     return result
@@ -551,10 +559,13 @@ def decrypt_paper(payload: DecryptRequest, request: Request):
     conn.close()
 
     # 4. Verify Time-Lock Window
-    try:
-        scheduled_time = datetime.strptime(scheduled_time_str, "%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        scheduled_time = datetime.fromisoformat(scheduled_time_str)
+    if isinstance(scheduled_time_str, datetime):
+        scheduled_time = scheduled_time_str
+    else:
+        try:
+            scheduled_time = datetime.strptime(scheduled_time_str, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            scheduled_time = datetime.fromisoformat(scheduled_time_str)
 
     current_time = datetime.now()
     if current_time < scheduled_time:
@@ -565,16 +576,15 @@ def decrypt_paper(payload: DecryptRequest, request: Request):
         )
 
     # 5. Perform Dual-Key 2-Stage Cryptographic Decryption
-    if not os.path.exists(file_path):
+    encrypted_data = load_file_from_cloud(file_path)
+    if not encrypted_data:
         log_audit_event(user_id=user_id, center_id=center_id, action_type="FILE_NOT_FOUND_ERROR", details=f"Encrypted file missing: {file_path}", ip_address=client_ip)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Encrypted question paper file '{file_path}' missing from storage.",
+            detail=f"Encrypted question paper file '{file_path}' missing from cloud storage.",
         )
 
     try:
-        with open(file_path, "rb") as f:
-            encrypted_data = f.read()
 
         test_adm_keys = [k for k in [payload.admin_token.strip(), adm_key] if k]
         test_sup_keys = [k for k in [raw_pin, sup_key] if k]
@@ -732,7 +742,9 @@ def fetch_student_paper(payload: StudentPaperRequest, request: Request):
             (payload.center_code.upper(), f"Exam Center {payload.center_code.upper()}", "Exam Hall Zone 1")
         )
         conn.commit()
-        center_id = cursor.lastrowid
+        # Explicit proxy fetch mimicking lastrowid
+        cursor.execute("SELECT center_id FROM exam_centers WHERE center_code = ?", (payload.center_code,))
+        center_id = cursor.fetchone()["center_id"]
     else:
         center_id = center_row["center_id"]
 
@@ -759,10 +771,13 @@ def fetch_student_paper(payload: StudentPaperRequest, request: Request):
     conn.close()
 
     # Enforce time-lock schedule verification for student kiosk
-    try:
-        scheduled_time = datetime.strptime(scheduled_time_str, "%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        scheduled_time = datetime.fromisoformat(scheduled_time_str)
+    if isinstance(scheduled_time_str, datetime):
+        scheduled_time = scheduled_time_str
+    else:
+        try:
+            scheduled_time = datetime.strptime(scheduled_time_str, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            scheduled_time = datetime.fromisoformat(scheduled_time_str)
 
     current_time = datetime.now()
     if current_time < scheduled_time:
@@ -816,20 +831,18 @@ def fetch_student_paper(payload: StudentPaperRequest, request: Request):
             detail=f"Waiting for Center Supervisor to decrypt and publish the question paper for subject '{payload.subject_code.upper()}'."
         )
 
-    if not os.path.exists(file_path):
+    encrypted_data = load_file_from_cloud(file_path)
+    if not encrypted_data:
         log_audit_event(
             center_id=center_id,
             action_type="STUDENT_PAPER_FILE_MISSING",
-            details=f"Encrypted file '{file_path}' missing from storage for subject '{payload.subject_code.upper()}'",
+            details=f"Encrypted file '{file_path}' missing from cloud storage for subject '{payload.subject_code.upper()}'",
             ip_address=client_ip
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Uploaded encrypted question paper file for subject '{payload.subject_code.upper()}' is missing from storage."
+            detail=f"Uploaded encrypted question paper file for subject '{payload.subject_code.upper()}' is missing from cloud storage."
         )
-
-    with open(file_path, "rb") as f:
-        encrypted_data = f.read()
     final_decrypted_text = decrypt_question_paper(encrypted_data, sup_key, adm_key)
 
     # Fetch student verification photo if available
@@ -1636,6 +1649,6 @@ if __name__ == "__main__":
                     self.end_headers()
                     self.wfile.write(json.dumps({"detail": str(e)}).encode('utf-8'))
 
-        print("FastAPI/uvicorn not found. Starting built-in zero-dependency HTTP server on http://localhost:8000 ...")
-        httpd = HTTPServer(("0.0.0.0", 8000), SimpleServer)
+        print("FastAPI/uvicorn not found. Starting built-in zero-dependency HTTP server on http://localhost:5050 ...")
+        httpd = HTTPServer(("0.0.0.0", 5050), SimpleServer)
         httpd.serve_forever()

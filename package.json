@@ -1,0 +1,8 @@
+{
+    "name": "secure-ems-root",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {
+        "start": "start cmd /k \"cd backend && python server.py\" && npm run dev --prefix frontend"
+    }
+}

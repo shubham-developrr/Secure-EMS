@@ -75,10 +75,11 @@ def deploy():
         sys.exit(1)
     
     print("Step 5: Updating your .env file automatically...")
-    with open(".env", "r") as f:
+    env_path = "../.env" if os.path.exists("../.env") else ".env"
+    with open(env_path, "r") as f:
         lines = f.readlines()
         
-    with open(".env", "w") as f:
+    with open(env_path, "w") as f:
         for line in lines:
             if line.startswith("CONTRACT_ADDRESS="):
                 f.write(f"CONTRACT_ADDRESS={contract_address}\n")
