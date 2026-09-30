@@ -2,7 +2,7 @@ import React from 'react';
 import PdfCanvasViewer from './PdfCanvasViewer.jsx';
 import ImagePaperViewer from './ImagePaperViewer.jsx';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const API_BASE = import.meta.env.VITE_API_URL || 'https://secure-ems-backend.onrender.com';
 
 const ensurePdfBlobUrl = (content) => {
   if (!content || typeof content !== 'string') return '';
