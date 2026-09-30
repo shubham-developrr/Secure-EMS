@@ -1,5 +1,5 @@
 import os
-import sqlite3
+import db_connector as sqlite3
 import hashlib
 import base64
 from typing import Optional
