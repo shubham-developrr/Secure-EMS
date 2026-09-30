@@ -1,6 +1,6 @@
 import React from 'react';
 
-const API_BASE = 'https://secure-ems-backend.onrender.com';
+const API_BASE = 'https://secure-ems.onrender.com';
 
 export default class SupervisorTerminal extends React.Component {
   constructor(props) {

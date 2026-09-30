@@ -3,7 +3,7 @@ import VerificationTerminal from './VerificationTerminal.jsx';
 import PdfCanvasViewer from './PdfCanvasViewer.jsx';
 import ImagePaperViewer from './ImagePaperViewer.jsx';
 
-const API_BASE = 'https://secure-ems-backend.onrender.com';
+const API_BASE = 'https://secure-ems.onrender.com';
 
 const ensurePdfBlobUrl = (content) => {
   if (!content || typeof content !== 'string') return '';
