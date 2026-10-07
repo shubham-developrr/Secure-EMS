@@ -25,6 +25,7 @@ jobs:
 
       - name: Run Backend Tests (Pytest)
         run: |
+          cd backend
           pytest -v
 
   test-frontend:
@@ -40,10 +41,10 @@ jobs:
 
       - name: Install Frontend Dependencies
         run: |
-          cd exam-frontend
+          cd frontend
           npm install
 
       - name: Run Frontend Unit Tests (Vitest)
         run: |
-          cd exam-frontend
+          cd frontend
           npm test -- --run

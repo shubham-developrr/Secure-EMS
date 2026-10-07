@@ -1,8 +1,0 @@
-fastapi
-uvicorn
-pydantic
-cryptography
-httpx
-web3
-python-dotenv
-psycopg2-binary
