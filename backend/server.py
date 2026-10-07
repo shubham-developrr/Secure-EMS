@@ -28,7 +28,7 @@ class CustomFernet:
 try:
     from cryptography.fernet import Fernet
 except ImportError:
-    Fernet = CustomFernet
+    Fernet = CustomFernet  # type: ignore
 
 def is_readable_text(text: str) -> bool:
     if not text or len(text.strip()) == 0:
@@ -39,7 +39,7 @@ def is_readable_text(text: str) -> bool:
     return ratio > 0.50 and (has_spaces_or_newlines or len(text) < 40)
 
 def decrypt_question_paper(encrypted_data: bytes, sup_key: str, adm_key: str) -> str:
-    fernet_classes = []
+    fernet_classes: list = []
     try:
         from cryptography.fernet import Fernet as CryptoFernet
         fernet_classes.append(CryptoFernet)
@@ -124,17 +124,17 @@ try:
         allow_headers=["*"],
     )
 except ImportError:
-    class HTTPException(Exception):
+    class HTTPException(Exception):  # type: ignore
         def __init__(self, status_code: int, detail: str):
             self.status_code = status_code
             self.detail = detail
 
-    class status:
+    class status:  # type: ignore
         HTTP_403_FORBIDDEN = 403
         HTTP_404_NOT_FOUND = 404
         HTTP_500_INTERNAL_SERVER_ERROR = 500
 
-    class BaseModel:
+    class BaseModel:  # type: ignore
         def __init__(self, **data):
             for k, v in data.items():
                 setattr(self, k, v)
@@ -150,8 +150,8 @@ except ImportError:
                 return func
             return decorator
 
-    app = MockApp()
-    Request = None
+    app = MockApp()  # type: ignore
+    Request = None  # type: ignore
 
 import db_config
 DB_NAME = db_config.get_db_path("exam_system.db")
@@ -225,7 +225,7 @@ class PublishPaperRequest(BaseModel):
     schedule_id: Optional[str] = ""
     supervisor_username: Optional[str] = "supervisor_center1"
 
-ACTIVE_STUDENT_SESSIONS = {}
+ACTIVE_STUDENT_SESSIONS: dict = {}
 
 def hash_pin(pin: str) -> str:
     return hashlib.sha256(pin.encode("utf-8")).hexdigest()
