@@ -1,5 +1,4 @@
 import React from 'react';
-import PdfCanvasViewer from './PdfCanvasViewer.jsx';
 import ImagePaperViewer from './ImagePaperViewer.jsx';
 
 const API_BASE = 'https://secure-ems.onrender.com';
@@ -675,21 +674,19 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                   </div>
                 )}
 
-                {/* PDF Document Viewer Toolbar */}
                 <div className="bg-slate-950 border border-slate-800 rounded-t-lg px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs font-mono select-none">
                   <div className="flex items-center gap-2">
-                    <span className="bg-red-600 text-white font-bold px-2 py-0.5 rounded text-[10px] tracking-wider uppercase">
-                      📕 PDF DOCUMENT
+                    <span className="bg-amber-600 text-white font-bold px-2 py-0.5 rounded text-[10px] tracking-wider uppercase">
+                      🖼️ IMAGE DOCUMENT
                     </span>
                     <span className="text-slate-200 font-bold truncate max-w-[200px] sm:max-w-none">
-                      {studentSubjectCode}_Question_Paper_2026.pdf
+                      {studentSubjectCode}_Question_Paper_2026
                     </span>
-                    <span className="text-slate-500 text-[10px] hidden sm:inline">| Page 1 of 1</span>
                   </div>
 
                   <div className="flex items-center gap-2">
                     <span className="bg-slate-900 border border-slate-800 text-emerald-400 px-2.5 py-1 rounded text-[10px] font-bold">
-                      🔒 READ-ONLY PDF KIOSK LOCK
+                      🔒 READ-ONLY KIOSK LOCK
                     </span>
                   </div>
                 </div>
@@ -707,21 +704,13 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
 
                   {/* Exact Uploaded PDF Document Stream or Clean Question Paper Payload */}
                   {(() => {
-                    const { dataUrl: activePdfDataUrl, text: activePaperText, pages: activePages } = this.getPaperDetails(studentPaperContent, studentSubjectCode);
+                    const { text: activePaperText, pages: activePages } = this.getPaperDetails(studentPaperContent, studentSubjectCode);
                     const displayContent = activePaperText || this.getCleanPaperContent(studentPaperContent, studentSubjectCode);
 
                     if (activePages && activePages.length > 0) {
                       return (
                         <div className="w-full relative z-20">
                           <ImagePaperViewer pages={activePages} subjectCode={studentSubjectCode} title={`Official Question Paper (${studentSubjectCode})`} />
-                        </div>
-                      );
-                    }
-
-                    if (activePdfDataUrl) {
-                      return (
-                        <div className="w-full relative z-20">
-                          <PdfCanvasViewer pdfDataUrl={activePdfDataUrl} />
                         </div>
                       );
                     }
