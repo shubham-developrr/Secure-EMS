@@ -595,7 +595,7 @@ def decrypt_paper(payload: DecryptRequest, request: Request):
     center_id = center_row["center_id"]
 
     # 3. Fetch Question Paper Metadata
-    cursor.execute("SELECT * FROM question_papers WHERE UPPER(subject_code) = UPPER(?)", (payload.subject_code,))
+    cursor.execute("SELECT * FROM question_papers WHERE UPPER(subject_code) = UPPER(?) ORDER BY paper_id DESC", (payload.subject_code,))
     paper_row = cursor.fetchone()
     if not paper_row:
         conn.close()
@@ -824,7 +824,7 @@ def fetch_student_paper(payload: StudentPaperRequest, request: Request):
     else:
         center_id = center_row["center_id"]
 
-    cursor.execute("SELECT * FROM question_papers WHERE UPPER(subject_code) = UPPER(?)", (payload.subject_code,))
+    cursor.execute("SELECT * FROM question_papers WHERE UPPER(subject_code) = UPPER(?) ORDER BY paper_id DESC", (payload.subject_code,))
     paper_row = cursor.fetchone()
 
     if not paper_row:

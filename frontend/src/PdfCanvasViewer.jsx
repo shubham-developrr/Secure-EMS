@@ -44,8 +44,7 @@ export default class PdfCanvasViewer extends React.Component {
       }
 
       if (window.pdfjsLib) {
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        window.pdfjsLib.GlobalWorkerOptions.disableWorker = true;
       }
 
       let loadingTask;
