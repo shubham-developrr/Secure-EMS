@@ -3,6 +3,8 @@
     "version": "1.0.0",
     "private": true,
     "scripts": {
-        "start": "start cmd /k \"cd backend && python server.py\" && npm run dev --prefix frontend"
+        "start": "start cmd /k \"cd backend && python server.py\" && npm run dev --prefix frontend",
+        "install": "npm install --prefix frontend",
+        "build": "npm run build --prefix frontend"
     }
 }
