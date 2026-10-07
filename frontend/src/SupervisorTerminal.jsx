@@ -249,11 +249,6 @@ export default class SupervisorTerminal extends React.Component {
       return;
     }
 
-    if (!adminToken || adminToken.trim() === '') {
-      this.setState({ error: 'Security Violation: Admin Token (Key A) is required.' });
-      return;
-    }
-
     if (!pin || pin.trim() === '') {
       this.setState({ error: 'Please enter the supervisor cryptographic PIN (Key B).' });
       return;
@@ -272,7 +267,7 @@ export default class SupervisorTerminal extends React.Component {
           center_code: centerCode,
           subject_code: subjectCode,
           pin,
-          admin_token: adminToken,
+          admin_token: "",
         }),
       });
 
@@ -555,19 +550,7 @@ export default class SupervisorTerminal extends React.Component {
                       )}
                     </div>
                   )}
-                  <div>
-                    <label htmlFor="sup-admin-token" className="block text-xs uppercase tracking-wider text-cyan-400 mb-1 font-mono font-bold">
-                      🔑 Key A: Central Admin Token
-                    </label>
-                    <input
-                      id="sup-admin-token"
-                      type="text"
-                      value={adminToken}
-                      onChange={(e) => this.setState({ adminToken: e.target.value })}
-                      placeholder="Enter central exam authority key (e.g. CTRL-KEY-999)"
-                      className="w-full bg-slate-950 border border-cyan-700 rounded-lg p-3 text-cyan-300 focus:outline-none focus:border-cyan-400 font-mono text-sm"
-                    />
-                  </div>
+
                   <div>
                     <label htmlFor="sup-secure-pin" className="block text-xs uppercase tracking-wider text-amber-400 mb-1 font-mono font-bold">
                       🔑 Key B: Supervisor Cryptographic PIN

@@ -198,15 +198,24 @@ export default class PdfCanvasViewer extends React.Component {
           )}
 
           {error && (
-            <div className="bg-red-950/80 border border-red-800 text-red-300 p-4 rounded-lg text-xs font-mono max-w-md text-center">
-              ❌ {error}
+            <div className="w-full h-full flex flex-col items-center">
+              <div className="bg-red-950/80 border border-red-800 text-red-300 p-4 rounded-lg text-xs font-mono max-w-md text-center mb-4 mt-10">
+                ❌ {error} - Attempting native browser fallback...
+              </div>
+              <object 
+                data={this.props.pdfDataUrl} 
+                type="application/pdf" 
+                className="w-full h-[600px] rounded-lg shadow-inner bg-white"
+              >
+                <p className="text-white p-4">Native PDF rendering also failed. The file uploaded is not a genuine, valid PDF document.</p>
+              </object>
             </div>
           )}
 
           <canvas
             ref={this.canvasRef}
             className={`shadow-2xl rounded border border-slate-300 bg-white transition-transform ${
-              loading ? 'hidden' : 'block'
+              (loading || error) ? 'hidden' : 'block'
             }`}
           />
         </div>
