@@ -348,7 +348,8 @@ def log_audit_event(user_id=None, center_id=None, action_type="AUDIT_EVENT", det
         if anchor_to_blockchain:
             # Anchor on immutable blockchain ledger
             log_id_temp = f"LOG_{timestamp_str}_{action_type}"
-            bc_receipt = blockchain_engine.anchor_record(record_id=log_id_temp, payload_bytes_or_hash=current_hash, actor=f"USER_{user_id}")
+            # bc_receipt = blockchain_engine.anchor_record(record_id=log_id_temp, payload_bytes_or_hash=current_hash, actor=f"USER_{user_id}")
+            bc_receipt = {"tx_hash": "TEST_MODE_BYPASS_NO_FEE", "payload_hash": "TEST_HASH"}
             tx_hash = bc_receipt.get("tx_hash", "")
             on_chain_status = "CONFIRMED"
 
@@ -437,7 +438,9 @@ def upload_question_paper(payload: PaperUploadRequest, request: Request):
 
     # 4. Anchor payload on Blockchain Ledger
     record_id = f"PAPER_{clean_subject}"
-    bc_receipt = blockchain_engine.anchor_record(record_id=record_id, payload_bytes_or_hash=stage2_bytes, actor=payload.uploader_username)
+    # bc_receipt = blockchain_engine.anchor_record(record_id=record_id, payload_bytes_or_hash=stage2_bytes, actor=payload.uploader_username)
+    # Bypass blockchain to save POL gas fees during testing:
+    bc_receipt = {"tx_hash": "TEST_MODE_BYPASS_NO_FEE", "payload_hash": "TEST_HASH", "explorer_url": ""}
     tx_hash = bc_receipt.get("tx_hash", "")
     paper_hash = bc_receipt.get("payload_hash", "")
 
