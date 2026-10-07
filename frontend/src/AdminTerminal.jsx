@@ -12,7 +12,7 @@ export default class AdminTerminal extends React.Component {
       newPaperText:
         'CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: Mathematics (MATH-201)\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Evaluate the definite integral of sin^2(x) from 0 to pi.\nQ2. Solve the linear differential equation dy/dx + P(x)y = Q(x).\nQ3. State and prove Cayley-Hamilton Theorem.',
       newDelaySeconds: 15,
-      uploadMode: 'pdf', // 'pdf' or 'image_pagewise'
+      uploadMode: 'image_pagewise', // Default to pagewise images
       imagePages: [], // Array of { id, dataUrl, fileName, sizeKb }
       pdfFile: null,
       pdfFileName: '',
