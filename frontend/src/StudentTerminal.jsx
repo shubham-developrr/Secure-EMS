@@ -347,9 +347,9 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
   };
 
   getPaperDetails = (rawContent, subjectCode) => {
-    let dataUrl = ensurePdfBlobUrl(rawContent);
     let text = '';
     let pages = null;
+    let dataUrl = '';
 
     if (typeof rawContent === 'string' && rawContent.trim()) {
       const trimmed = rawContent.trim();
@@ -375,8 +375,13 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
         } catch (e) {
           text = rawContent;
         }
-      } else if (!dataUrl) {
-        text = rawContent;
+      }
+
+      if (!dataUrl && (!pages || pages.length === 0)) {
+        dataUrl = ensurePdfBlobUrl(rawContent);
+        if (!dataUrl && !text) {
+          text = rawContent;
+        }
       }
     }
 
