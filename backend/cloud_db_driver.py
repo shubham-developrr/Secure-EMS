@@ -13,6 +13,7 @@ class CloudDBCursor:
     def execute(self, query, params=None):
         pg_query = query.replace("?", "%s")
         pg_query = pg_query.replace("INSERT OR IGNORE INTO", "INSERT INTO")
+        pg_query = pg_query.replace("INSERT OR REPLACE INTO", "INSERT INTO")
         
         # Suppress legacy SQLite schema mutations dynamically
         upp = pg_query.strip().upper()

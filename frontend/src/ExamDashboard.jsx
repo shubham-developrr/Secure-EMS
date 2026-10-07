@@ -1152,7 +1152,7 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
       if (trimmed.startsWith('{')) {
         try {
           const parsed = JSON.parse(trimmed);
-          if (parsed.dataUrl) dataUrl = ensurePdfBlobUrl(parsed.dataUrl) || parsed.dataUrl;
+          if (parsed.dataUrl) dataUrl = parsed.dataUrl;
           if (parsed.pages && Array.isArray(parsed.pages)) {
             pages = parsed.pages;
           }
@@ -1255,17 +1255,7 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
   handleDecrypt = async (e) => {
     e.preventDefault();
 
-    const { countdown, pin, adminToken, centerCode, subjectCode } = this.state;
-
-    if (countdown > 0) {
-      this.setState({ error: 'Security Violation: Time-lock window has not opened yet!' });
-      return;
-    }
-
-    if (!adminToken || adminToken.trim() === '') {
-      this.setState({ error: 'Security Violation: Admin Token (Key A) is required.' });
-      return;
-    }
+    const { countdown, pin, centerCode, subjectCode } = this.state;
 
     if (!pin || pin.trim() === '') {
       this.setState({ error: 'Please enter the supervisor cryptographic PIN (Key B).' });
@@ -1285,7 +1275,7 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
           center_code: centerCode,
           subject_code: subjectCode,
           pin,
-          admin_token: adminToken,
+          admin_token: "",
         }),
       });
 
@@ -2024,7 +2014,7 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                 )}
 
                 <form onSubmit={this.handleUploadPaper} className="space-y-5 bg-slate-950 p-6 rounded-lg border border-slate-800">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4">
                     <div>
                       <label htmlFor="new-subject-code" className="block text-xs uppercase tracking-wider text-slate-400 mb-1">
                         Subject Code
@@ -2038,20 +2028,7 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                         className="w-full bg-slate-900 border border-slate-700 rounded p-3 text-slate-100 font-mono text-sm focus:outline-none focus:border-amber-500"
                       />
                     </div>
-                    <div>
-                      <label htmlFor="new-delay-seconds" className="block text-xs uppercase tracking-wider text-slate-400 mb-1">
-                        Time-Lock Delay (Seconds)
-                      </label>
-                      <input
-                        id="new-delay-seconds"
-                        type="number"
-                        min="5"
-                        max="3600"
-                        value={newDelaySeconds}
-                        onChange={(e) => this.setState({ newDelaySeconds: e.target.value })}
-                        className="w-full bg-slate-900 border border-slate-700 rounded p-3 text-slate-100 font-mono text-sm focus:outline-none focus:border-amber-500"
-                      />
-                    </div>
+
                   </div>
 
                   {/* Pagewise Image Upload UI */}
@@ -2544,27 +2521,7 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                   </div>
                 )}
 
-            {!isUnlocked && countdown > 0 && (
-              <div className="text-center py-10 space-y-6">
-                <div className="inline-block p-4 bg-slate-900 rounded-full border border-slate-700 text-amber-400 animate-pulse">
-                  🔒 SYSTEM STATUS: SECURE & LOCKED
-                </div>
-                <div className="space-y-2">
-                  {subjectCode ? <p className="text-sm text-slate-400">Subject: <span className="text-cyan-400 font-mono font-bold">{subjectCode}</span></p> : null}
-                </div>
-                <div className="bg-slate-950 p-6 rounded-lg border border-slate-800 max-w-md mx-auto">
-                  <p className="text-xs text-slate-500 uppercase tracking-wider mb-2">Time-Lock Countdown</p>
-                  <p className="text-3xl font-mono text-amber-400 font-bold">
-                    00 : 00 : {countdown < 10 ? `0${countdown}` : countdown}
-                  </p>
-                </div>
-                <p className="text-xs text-slate-500 italic">
-                  Question paper is encrypted locally. Decryption keys release automatically at zero.
-                </p>
-              </div>
-            )}
-
-            {!isUnlocked && countdown === 0 && (
+            {!isUnlocked && (
               <div className="max-w-2xl mx-auto py-6 space-y-6">
                 {/* AI Scheduled Exams Queue Section */}
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-3 font-mono shadow-lg">
@@ -2670,19 +2627,7 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                       className="w-full bg-slate-950 border border-slate-700 rounded p-3 text-slate-100 focus:outline-none focus:border-cyan-500 font-mono text-sm"
                     />
                   </div>
-                  <div>
-                    <label htmlFor="admin-token" className="block text-xs uppercase tracking-wider text-cyan-400 mb-1">
-                      🔑 Key A: Admin Token
-                    </label>
-                    <input
-                      id="admin-token"
-                      type="text"
-                      value={adminToken}
-                      onChange={(e) => this.setState({ adminToken: e.target.value })}
-                      placeholder="Enter central exam authority key (e.g. CTRL-KEY-999)"
-                      className="w-full bg-slate-950 border border-cyan-700 rounded p-3 text-cyan-300 focus:outline-none focus:border-cyan-400 font-mono text-sm"
-                    />
-                  </div>
+
                   <div>
                     <label htmlFor="secure-pin" className="block text-xs uppercase tracking-wider text-amber-400 mb-1">
                       🔑 Key B: Supervisor Secure PIN

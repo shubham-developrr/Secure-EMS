@@ -26,13 +26,41 @@ export default class AdminTerminal extends React.Component {
       auditLogs: [],
       auditLoading: false,
       auditError: '',
+      pendingSchedules: [],
+      selectedScheduleId: '',
     };
+  }
+
+  formatDateToLocal(dateStr) {
+    if (!dateStr) return '';
+    if (dateStr.includes('/')) return dateStr;
+    try {
+      const normalizedStr = dateStr.replace(' ', 'T');
+      const date = new Date(normalizedStr + 'Z');
+      if (isNaN(date.getTime())) return dateStr;
+      return date.toLocaleString();
+    } catch (e) {
+      return dateStr;
+    }
   }
 
   componentDidMount() {
     this.loadRegisteredPapers();
     this.loadAuditLogs();
+    this.loadPendingSchedules();
   }
+
+  loadPendingSchedules = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/scheduled-exams`);
+      const data = await response.json();
+      if (response.ok && Array.isArray(data.scheduled_exams)) {
+        this.setState({ pendingSchedules: data.scheduled_exams });
+      }
+    } catch (e) {
+      console.error('Failed to load scheduled exams', e);
+    }
+  };
 
   handlePdfFileChange = async (e) => {
     const file = e.target.files && e.target.files[0];
@@ -317,6 +345,7 @@ export default class AdminTerminal extends React.Component {
           paper_text: paperPayload,
           delay_seconds: parseInt(newDelaySeconds, 10) || 10,
           uploader_username: 'controller_verma',
+          schedule_id: this.state.selectedScheduleId || null,
         }),
       });
 
@@ -343,19 +372,26 @@ export default class AdminTerminal extends React.Component {
         subject_code: subj,
         scheduled_unlock_time: unlockTime,
         admin_key: 'KEY-A-LOCAL-' + Math.random().toString(36).substr(2, 9).toUpperCase(),
+        is_fallback: true,
       };
       this.setState({ uploadSuccess: finalData, uploadError: '' });
     } finally {
       if (finalData) {
         const subj = finalData.subject_code || newSubjectCode.trim().toUpperCase();
         const unlockTime = finalData.scheduled_unlock_time || new Date(Date.now() + (parseInt(newDelaySeconds, 10) || 10) * 1000).toLocaleString();
-        const newPaperRecord = {
-          paper_id: Date.now(),
-          subject_code: subj,
-          encrypted_file_path: `${subj.toLowerCase()}_encrypted.enc`,
-          scheduled_unlock_time: unlockTime,
-          created_at: new Date().toLocaleString(),
-        };
+        
+        if (finalData.is_fallback) {
+          const newPaperRecord = {
+            paper_id: Date.now(),
+            subject_code: subj,
+            encrypted_file_path: `${subj.toLowerCase()}_encrypted.enc`,
+            scheduled_unlock_time: unlockTime,
+            created_at: new Date().toLocaleString(),
+          };
+          this.setState((prev) => ({
+            registeredPapers: [newPaperRecord, ...prev.registeredPapers.filter((p) => p.subject_code !== subj)],
+          }));
+        }
 
         const paperObj = {
           text: newPaperText,
@@ -372,10 +408,6 @@ export default class AdminTerminal extends React.Component {
         } catch (e) {
           console.error('Failed to persist custom paper in localStorage', e);
         }
-
-        this.setState((prev) => ({
-          registeredPapers: [newPaperRecord, ...prev.registeredPapers.filter((p) => p.subject_code !== subj)],
-        }));
       }
       this.setState({ uploading: false });
     }
@@ -396,6 +428,8 @@ export default class AdminTerminal extends React.Component {
       auditLogs,
       auditLoading,
       auditError,
+      pendingSchedules,
+      selectedScheduleId,
     } = this.state;
 
     return (
@@ -498,6 +532,32 @@ export default class AdminTerminal extends React.Component {
           <form onSubmit={this.handleUploadPaper} className="space-y-5 bg-slate-950 p-6 rounded-xl border border-slate-800 font-sans shadow-inner">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
+                <label htmlFor="schedule-select" className="block text-xs uppercase tracking-wider text-slate-400 mb-1 font-mono flex items-center gap-2">
+                  <span>Link to Scheduled Exam</span>
+                  <span className="bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded text-[10px]">RECOMMENDED</span>
+                </label>
+                <select
+                  id="schedule-select"
+                  value={selectedScheduleId}
+                  onChange={(e) => {
+                    const sched = pendingSchedules.find(s => s.schedule_id === e.target.value);
+                    this.setState({
+                      selectedScheduleId: e.target.value,
+                      newSubjectCode: sched ? sched.subject_code : this.state.newSubjectCode
+                    });
+                  }}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-slate-100 font-mono text-sm focus:outline-none focus:border-amber-500 appearance-none"
+                >
+                  <option value="">-- Select Scheduled Exam --</option>
+                  {pendingSchedules.map(sched => (
+                    <option key={sched.schedule_id} value={sched.schedule_id}>
+                      {sched.subject_code} @ {sched.center_code} ({sched.exam_date} {sched.exam_time})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
                 <label htmlFor="new-subject-code" className="block text-xs uppercase tracking-wider text-slate-400 mb-1 font-mono">
                   Subject Code
                 </label>
@@ -510,20 +570,8 @@ export default class AdminTerminal extends React.Component {
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-slate-100 font-mono text-sm focus:outline-none focus:border-amber-500"
                 />
               </div>
-              <div>
-                <label htmlFor="new-delay-seconds" className="block text-xs uppercase tracking-wider text-slate-400 mb-1 font-mono">
-                  Time-Lock Delay (Seconds)
-                </label>
-                <input
-                  id="new-delay-seconds"
-                  type="number"
-                  min="5"
-                  max="3600"
-                  value={newDelaySeconds}
-                  onChange={(e) => this.setState({ newDelaySeconds: e.target.value })}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-slate-100 font-mono text-sm focus:outline-none focus:border-amber-500"
-                />
-              </div>
+
+
             </div>
 
             {/* Pagewise Image Upload UI */}
@@ -707,7 +755,7 @@ export default class AdminTerminal extends React.Component {
                         <td className="p-3 font-bold text-amber-300">{paper.subject_code}</td>
                         <td className="p-3 text-slate-400">{paper.encrypted_file_path}</td>
                         <td className="p-3 text-emerald-400">{paper.scheduled_unlock_time}</td>
-                        <td className="p-3 text-slate-500">{paper.created_at}</td>
+                        <td className="p-3 text-slate-500">{this.formatDateToLocal(paper.created_at)}</td>
                       </tr>
                     ))
                   )}

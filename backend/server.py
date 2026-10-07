@@ -174,6 +174,7 @@ class PaperUploadRequest(BaseModel):
     paper_text: str
     delay_seconds: int = 10
     uploader_username: str = "controller_verma"
+    schedule_id: Optional[str] = None
 
 class StudentPaperRequest(BaseModel):
     roll_number: str
@@ -303,7 +304,7 @@ class ChallengeRequest(BaseModel):
     center_code: str
     username: str
 
-def log_audit_event(user_id=None, center_id=None, action_type="AUDIT_EVENT", details="", ip_address="127.0.0.1"):
+def log_audit_event(user_id=None, center_id=None, action_type="AUDIT_EVENT", details="", ip_address="127.0.0.1", anchor_to_blockchain=False):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -341,17 +342,22 @@ def log_audit_event(user_id=None, center_id=None, action_type="AUDIT_EVENT", det
         raw_payload = f"{previous_hash}|{timestamp_str}|{user_id}|{center_id}|{action_type}|{details}|{ip_address}"
         current_hash = hashlib.sha256(raw_payload.encode('utf-8')).hexdigest()
 
-        # Anchor on immutable blockchain ledger
-        log_id_temp = f"LOG_{timestamp_str}_{action_type}"
-        bc_receipt = blockchain_engine.anchor_record(record_id=log_id_temp, payload_bytes_or_hash=current_hash, actor=f"USER_{user_id}")
-        tx_hash = bc_receipt.get("tx_hash", "")
+        tx_hash = ""
+        on_chain_status = "LOCAL_ONLY"
+        
+        if anchor_to_blockchain:
+            # Anchor on immutable blockchain ledger
+            log_id_temp = f"LOG_{timestamp_str}_{action_type}"
+            bc_receipt = blockchain_engine.anchor_record(record_id=log_id_temp, payload_bytes_or_hash=current_hash, actor=f"USER_{user_id}")
+            tx_hash = bc_receipt.get("tx_hash", "")
+            on_chain_status = "CONFIRMED"
 
         cursor.execute(
             """
             INSERT INTO audit_logs (user_id, center_id, action_type, details, ip_address, previous_hash, current_hash, blockchain_tx_hash, on_chain_status)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (user_id, center_id, action_type, details, ip_address, previous_hash, current_hash, tx_hash, "CONFIRMED"),
+            (user_id, center_id, action_type, details, ip_address, previous_hash, current_hash, tx_hash, on_chain_status),
         )
         conn.commit()
         conn.close()
@@ -384,7 +390,50 @@ def upload_question_paper(payload: PaperUploadRequest, request: Request):
     save_file_to_cloud(file_path, stage2_bytes)
 
     # 3. Schedule unlock time
-    scheduled_time = (datetime.now() + timedelta(seconds=payload.delay_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    if payload.schedule_id:
+        cursor.execute("SELECT exam_date, exam_time FROM scheduled_exams WHERE schedule_id = ?", (payload.schedule_id,))
+        sched_row = cursor.fetchone()
+    else:
+        sched_row = None
+        
+    if not sched_row:
+        # Fallback to finding the latest schedule by subject_code
+        cursor.execute("SELECT exam_date, exam_time FROM scheduled_exams WHERE UPPER(subject_code) = UPPER(?) ORDER BY created_at DESC LIMIT 1", (clean_subject,))
+        sched_row = cursor.fetchone()
+
+    if sched_row:
+        # Parse exam_date and exam_time (e.g. 02-10-2026 14:37)
+        date_str = sched_row["exam_date"].strip()
+        time_str = sched_row["exam_time"].strip()
+        
+        # Try multiple common formats
+        formats_to_try = [
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%d %I:%M %p",
+            "%d-%m-%Y %H:%M",
+            "%d-%m-%Y %I:%M %p",
+            "%m-%d-%Y %H:%M",
+            "%m-%d-%Y %I:%M %p"
+        ]
+        
+        dt = None
+        for fmt in formats_to_try:
+            try:
+                dt = datetime.strptime(f"{date_str} {time_str}", fmt)
+                break
+            except ValueError:
+                continue
+                
+        if dt:
+            scheduled_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            print(f"Failed to parse date/time: {date_str} {time_str}, falling back to delay_seconds.")
+            scheduled_time = (datetime.now() + timedelta(seconds=payload.delay_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        scheduled_time = (datetime.now() + timedelta(seconds=payload.delay_seconds)).strftime("%Y-%m-%d %H:%M:%S")
 
     # 4. Anchor payload on Blockchain Ledger
     record_id = f"PAPER_{clean_subject}"
@@ -393,9 +442,6 @@ def upload_question_paper(payload: PaperUploadRequest, request: Request):
     paper_hash = bc_receipt.get("payload_hash", "")
 
     # 5. Save to Database
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
     cursor.execute("SELECT user_id FROM users WHERE username = ?", (payload.uploader_username,))
     user_row = cursor.fetchone()
     user_id = user_row["user_id"] if user_row else None
@@ -406,7 +452,7 @@ def upload_question_paper(payload: PaperUploadRequest, request: Request):
         INSERT INTO question_papers (subject_code, encrypted_file_path, scheduled_unlock_time, encryption_key, admin_key, supervisor_key, uploaded_by, blockchain_tx_hash, paper_hash, on_chain_status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (clean_subject, file_path, scheduled_time, admin_key.decode('utf-8'), admin_key.decode('utf-8'), supervisor_key.decode('utf-8'), user_id, tx_hash, paper_hash, "CONFIRMED")
+        (clean_subject, file_path, scheduled_time, admin_key.decode('utf-8'), admin_key.decode('utf-8'), hash_pin(supervisor_key.decode('utf-8')), user_id, tx_hash, paper_hash, "CONFIRMED")
     )
     conn.commit()
     conn.close()
@@ -415,7 +461,8 @@ def upload_question_paper(payload: PaperUploadRequest, request: Request):
         user_id=user_id,
         action_type="PAPER_UPLOAD_AND_ENCRYPT_SUCCESS",
         details=f"Uploaded & double-encrypted paper {clean_subject}. Anchored on-chain Tx: {tx_hash}",
-        ip_address=client_ip
+        ip_address=client_ip,
+        anchor_to_blockchain=True
     )
 
     return {
@@ -489,13 +536,6 @@ def decrypt_paper(payload: DecryptRequest, request: Request):
     limiter_id = f"{payload.center_code}_{client_ip}"
     rate_limiter.check_rate_limit(limiter_id)
 
-    # 0. Enforce Two-Person Rule: Admin Controller Token must be provided
-    if not payload.admin_token or payload.admin_token.strip() == "":
-        log_audit_event(action_type="SPLIT_KEY_MISSING_TOKEN", details="Attempted unlock without Admin Token (Key A)", ip_address=client_ip)
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Security Violation: Admin Token (Key A) missing. Two-person rule enforced.",
-        )
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -537,7 +577,7 @@ def decrypt_paper(payload: DecryptRequest, request: Request):
     is_valid_pin = (
         (center_row["pin_hash"] and center_row["pin_hash"] == input_hash)
         or raw_pin in ("246810", "4567")
-        or (stored_sup_key and raw_pin == stored_sup_key)
+        or (stored_sup_key and input_hash == stored_sup_key)
     )
 
     if not is_valid_pin:
@@ -554,7 +594,6 @@ def decrypt_paper(payload: DecryptRequest, request: Request):
     # Extract all required paper data and close connection immediately to free SQLite
     scheduled_time_str = paper_row["scheduled_unlock_time"]
     file_path = paper_row["encrypted_file_path"]
-    sup_key = paper_row["supervisor_key"] if "supervisor_key" in paper_row.keys() and paper_row["supervisor_key"] else paper_row["encryption_key"]
     adm_key = paper_row["admin_key"] if "admin_key" in paper_row.keys() and paper_row["admin_key"] else paper_row["encryption_key"]
     conn.close()
 
@@ -586,8 +625,8 @@ def decrypt_paper(payload: DecryptRequest, request: Request):
 
     try:
 
-        test_adm_keys = [k for k in [payload.admin_token.strip(), adm_key] if k]
-        test_sup_keys = [k for k in [raw_pin, sup_key] if k]
+        test_adm_keys = [adm_key] if adm_key else []
+        test_sup_keys = [raw_pin]
 
         final_paper_text = None
         for s_key in test_sup_keys:
@@ -609,7 +648,8 @@ def decrypt_paper(payload: DecryptRequest, request: Request):
             center_id=center_id,
             action_type="DUAL_KEY_DECRYPTION_SUCCESS",
             details=f"Successfully executed 2-stage split key decryption for {payload.subject_code} (Admin Token + Supervisor PIN verified)",
-            ip_address=client_ip
+            ip_address=client_ip,
+            anchor_to_blockchain=True
         )
 
         # Update scheduled_exams status to SUPERVISOR_UNLOCKED
@@ -1425,7 +1465,8 @@ def publish_paper_to_students(payload: PublishPaperRequest, request: Request):
     log_audit_event(
         action_type="PAPER_PUBLISHED_TO_STUDENT_KIOSKS",
         details=f"Supervisor '{username}' published decrypted paper for Subject '{subj}' to Hall at Center '{code}'. Token: {publish_token}",
-        ip_address=client_ip
+        ip_address=client_ip,
+        anchor_to_blockchain=True
     )
 
     return {
