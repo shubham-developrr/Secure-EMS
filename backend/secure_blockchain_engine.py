@@ -99,6 +99,14 @@ class SecureBlockchainEngine:
         except Exception as e:
             print(f"Web3 initialization failed: {e}. Falling back to LOCAL MOCK mode.")
 
+        # Auto-sync on boot to recover from ephemeral storage wipes
+        try:
+            if getattr(self, 'use_real_blockchain', False):
+                import threading
+                threading.Thread(target=self.sync_from_global_chain, daemon=True).start()
+        except Exception as e:
+            pass
+
 
     def _get_connection(self):
         return sqlite3.connect(self.db_path)
