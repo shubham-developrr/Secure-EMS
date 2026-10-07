@@ -65,8 +65,16 @@ class CloudDBConnection:
         self.conn.close()
 
 def get_db_connection():
-    # Looks for Supabase connection string. Defaults to None if missing.
-    dsn = os.getenv("SUPABASE_DATABASE_URL")
-    if not dsn:
-        raise Exception("SUPABASE_DATABASE_URL environment variable is missing!")
+    # Prevent tests from falling back to Supabase
+    TESTING = os.getenv("TESTING") == "1"
+    
+    if TESTING:
+        dsn = os.getenv("DATABASE_URL")
+        if not dsn:
+            raise Exception("DATABASE_URL environment variable must be configured for tests!")
+    else:
+        dsn = os.getenv("SUPABASE_DATABASE_URL")
+        if not dsn:
+            raise Exception("SUPABASE_DATABASE_URL environment variable is missing!")
+            
     return CloudDBConnection(dsn)
