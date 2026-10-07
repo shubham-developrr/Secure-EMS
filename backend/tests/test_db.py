@@ -20,8 +20,10 @@ def test():
     
     # 4. Verify Time-Lock Window (Simulating server.py lines 551-555)
     try:
-        print("Type of scheduled_time_str:", type(scheduled_time_str))
-        scheduled_time = datetime.strptime(scheduled_time_str, "%Y-%m-%d %H:%M:%S")
+        if isinstance(scheduled_time_str, datetime):
+            scheduled_time = scheduled_time_str
+        else:
+            scheduled_time = datetime.strptime(scheduled_time_str, "%Y-%m-%d %H:%M:%S")
     except ValueError as e:
         print("ValueError:", e)
         scheduled_time = datetime.fromisoformat(scheduled_time_str)

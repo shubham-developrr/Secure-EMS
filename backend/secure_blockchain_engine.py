@@ -2,7 +2,7 @@ import hashlib
 import json
 import time
 import os
-import db_connector as sqlite3
+import sqlite3
 from typing import Dict, Any, List, Optional, Tuple
 from web3 import Web3
 from dotenv import load_dotenv

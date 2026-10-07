@@ -1267,8 +1267,16 @@ def schedule_exam(payload: ScheduleExamRequest, request: Request):
 
     cursor.execute(
         """
-        INSERT OR REPLACE INTO scheduled_exams (schedule_id, center_code, exam_date, exam_time, subject_code, duration_mins, scheduled_by, status)
+        INSERT INTO scheduled_exams (schedule_id, center_code, exam_date, exam_time, subject_code, duration_mins, scheduled_by, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, 'SCHEDULED')
+        ON CONFLICT (schedule_id) DO UPDATE SET
+            center_code = EXCLUDED.center_code,
+            exam_date = EXCLUDED.exam_date,
+            exam_time = EXCLUDED.exam_time,
+            subject_code = EXCLUDED.subject_code,
+            duration_mins = EXCLUDED.duration_mins,
+            scheduled_by = EXCLUDED.scheduled_by,
+            status = EXCLUDED.status
         """,
         (sched_id, code, date_str, time_str, subj, dur, payload.scheduled_by or "AI_AGENT_SCHEDULER")
     )
@@ -1437,43 +1445,7 @@ def publish_paper_to_students(payload: PublishPaperRequest, request: Request):
         "timestamp": datetime.now().isoformat()
     }
 
-@app.get("/api/dashboard/personnel-status")
-def get_dashboard_personnel_status():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        try:
-            center_count = cursor.execute("SELECT COUNT(*) FROM exam_centers").fetchone()[0]
-        except Exception:
-            center_count = 0
 
-        try:
-            paper_count = cursor.execute("SELECT COUNT(*) FROM question_papers").fetchone()[0]
-        except Exception:
-            paper_count = 0
-        conn.close()
-
-        active_kiosks = len([s for s in ACTIVE_STUDENT_SESSIONS.values() if s.get("status") == "ACTIVE"])
-
-        return {
-            "status": "success",
-            "admin_status": "ONLINE",
-            "admin_last_seen": datetime.now().isoformat(),
-            "supervisor_status": "ONLINE",
-            "supervisor_last_seen": datetime.now().isoformat(),
-            "total_centers": center_count,
-            "total_papers": paper_count,
-            "active_kiosks": active_kiosks
-        }
-    except Exception as e:
-        return {
-            "status": "success",
-            "admin_status": "ONLINE",
-            "supervisor_status": "ONLINE",
-            "total_centers": 1,
-            "total_papers": 1,
-            "active_kiosks": 0
-        }
 
 if __name__ == "__main__":
     try:
