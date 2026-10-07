@@ -1,4 +1,4 @@
-import db_connector as sqlite3
+import sqlite3
 import os
 import hashlib
 
@@ -52,6 +52,14 @@ def ensure_scheduled_exams_columns(cursor):
         cursor.execute("ALTER TABLE scheduled_exams ADD COLUMN unlocked_by_user TEXT;")
     if "hall_publish_token" not in columns:
         cursor.execute("ALTER TABLE scheduled_exams ADD COLUMN hall_publish_token TEXT;")
+
+def ensure_audit_logs_hash_columns(cursor):
+    cursor.execute("PRAGMA table_info(audit_logs);")
+    columns = {row[1] for row in cursor.fetchall()}
+    if "previous_hash" not in columns:
+        cursor.execute("ALTER TABLE audit_logs ADD COLUMN previous_hash TEXT;")
+    if "current_hash" not in columns:
+        cursor.execute("ALTER TABLE audit_logs ADD COLUMN current_hash TEXT;")
 
 def initialize_database():
     # Check if database already exists
@@ -117,14 +125,6 @@ def initialize_database():
     );
     """)
     ensure_question_papers_encryption_key_column(cursor)
-
-def ensure_audit_logs_hash_columns(cursor):
-    cursor.execute("PRAGMA table_info(audit_logs);")
-    columns = {row[1] for row in cursor.fetchall()}
-    if "previous_hash" not in columns:
-        cursor.execute("ALTER TABLE audit_logs ADD COLUMN previous_hash TEXT;")
-    if "current_hash" not in columns:
-        cursor.execute("ALTER TABLE audit_logs ADD COLUMN current_hash TEXT;")
 
     # 5. Audit Logs Table (Append-Only Cryptographic Ledger)
     cursor.execute("""

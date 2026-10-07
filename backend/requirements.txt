@@ -6,3 +6,4 @@ httpx
 web3
 python-dotenv
 supabase
+psycopg2-binary
