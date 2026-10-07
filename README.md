@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="C:/Users/shubham/.gemini/antigravity-ide/brain/60d87a83-e12e-428c-8cf0-b7271c3559f2/secure_ems_banner_1791363222185.jpg" alt="Secure EMS Banner" width="100%">
+<img src="docs/assets/banner.jpg" alt="Secure EMS Banner" width="100%">
 
 # 🛡️ Secure EMS (Examination Management System)
 
