@@ -525,8 +525,44 @@ def verify_paper_on_chain(payload: BlockchainVerifyRequest):
 @app.get("/api/blockchain/ledger")
 def get_blockchain_ledger():
     try:
-        blocks = blockchain_engine.get_recent_blocks(limit=25)
-        return {"status": "success", "ledger": blocks}
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Fetch directly from Supabase
+        papers = cursor.execute("SELECT paper_id, subject_code, created_at, blockchain_tx_hash, paper_hash, on_chain_status FROM question_papers WHERE blockchain_tx_hash IS NOT NULL AND blockchain_tx_hash != '' ORDER BY paper_id DESC LIMIT 25").fetchall()
+        logs = cursor.execute("SELECT log_id, action_type, timestamp, blockchain_tx_hash, current_hash, on_chain_status FROM audit_logs WHERE blockchain_tx_hash IS NOT NULL AND blockchain_tx_hash != '' ORDER BY log_id DESC LIMIT 25").fetchall()
+        
+        conn.close()
+
+        ledger = []
+        for p in papers:
+            ledger.append({
+                "tx_hash": p["blockchain_tx_hash"],
+                "record_id": f"PAPER_{p['subject_code']}",
+                "payload_hash": p["paper_hash"],
+                "block_number": p["paper_id"],
+                "timestamp": p["created_at"],
+                "status": p["on_chain_status"] or "CONFIRMED",
+                "block_hash": p["paper_hash"],
+                "explorer_url": f"https://amoy.polygonscan.com/tx/{p['blockchain_tx_hash']}"
+            })
+            
+        for l in logs:
+            ledger.append({
+                "tx_hash": l["blockchain_tx_hash"],
+                "record_id": f"LOG_{l['action_type']}",
+                "payload_hash": l["current_hash"],
+                "block_number": l["log_id"],
+                "timestamp": l["timestamp"],
+                "status": l["on_chain_status"] or "CONFIRMED",
+                "block_hash": l["current_hash"],
+                "explorer_url": f"https://amoy.polygonscan.com/tx/{l['blockchain_tx_hash']}"
+            })
+            
+        # Sort by timestamp descending
+        ledger.sort(key=lambda x: str(x.get("timestamp", "")), reverse=True)
+        
+        return {"status": "success", "ledger": ledger[:25]}
     except Exception as e:
         return {"status": "error", "ledger": [], "message": str(e)}
 
