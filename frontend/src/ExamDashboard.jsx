@@ -120,6 +120,8 @@ export default class ExamDashboard extends React.Component {
       focusLostModal: false,
       viewMode: 'pdf',
       studentStatuses: [],
+      kioskSubmitted: false,
+      adminUnlockPin: '',
 
       // Personnel Monitor state
       personnelData: null,
@@ -1248,18 +1250,31 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
   };
 
   handleExitStudentKiosk = () => {
-    if (window.confirm('Exit Student Secure Kiosk mode? This will lock the terminal.')) {
-      this.setState({ studentUnlocked: false, studentPaperContent: '', focusLostModal: false });
-      if (document.fullscreenElement && document.exitFullscreen) {
-        document.exitFullscreen().catch(() => {});
+    if (window.confirm('Submit paper and lock terminal? You will not be able to return.')) {
+      this.setState({ kioskSubmitted: true });
+    }
+  };
+
+  handleAdminUnlock = () => {
+    if (this.state.adminUnlockPin === '9999') {
+      try {
+        const { ipcRenderer } = window.require('electron');
+        ipcRenderer.send('admin-quit');
+      } catch (e) {
+        this.setState({ studentUnlocked: false, studentPaperContent: '', focusLostModal: false, kioskSubmitted: false, adminUnlockPin: '' });
+        if (document.fullscreenElement && document.exitFullscreen) {
+          document.exitFullscreen().catch(() => {});
+        }
       }
+    } else {
+      alert('Incorrect Admin PIN.');
     }
   };
 
   handleDecrypt = async (e) => {
     e.preventDefault();
 
-    const { countdown, pin, centerCode, subjectCode } = this.state;
+    const { countdown, pin, centerCode, subjectCode, adminToken } = this.state;
 
     if (!pin || pin.trim() === '') {
       this.setState({ error: 'Please enter the supervisor cryptographic PIN (Key B).' });
@@ -1279,7 +1294,7 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
           center_code: centerCode,
           subject_code: subjectCode,
           pin,
-          admin_token: "",
+          admin_token: adminToken || "",
         }),
       });
 
@@ -1358,6 +1373,8 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
       studentSecurityAlert,
       focusLostModal,
       studentStatuses,
+      kioskSubmitted,
+      adminUnlockPin,
       personnelData,
       personnelLoading,
       scheduleCenterCode,
@@ -2212,7 +2229,28 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
 
             {activeTab === 'STUDENT' && (
               <div className="space-y-6">
-                {!studentUnlocked ? (
+                {kioskSubmitted ? (
+                  <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col items-center justify-center space-y-6">
+                    <div className="text-6xl mb-4">🔒</div>
+                    <h1 className="text-4xl font-bold text-emerald-400 uppercase tracking-widest text-center px-4">Exam Submitted</h1>
+                    <p className="text-slate-400 text-lg">The terminal is now locked. Please call an Administrator.</p>
+                    <div className="mt-8 flex flex-col items-center space-y-4">
+                      <input 
+                        type="password" 
+                        placeholder="Admin PIN (e.g. 9999)" 
+                        value={adminUnlockPin}
+                        onChange={(e) => this.setState({ adminUnlockPin: e.target.value })}
+                        className="bg-slate-900 border border-slate-700 rounded px-4 py-3 text-center text-xl text-amber-400 font-mono focus:outline-none focus:border-amber-500"
+                      />
+                      <button 
+                        onClick={this.handleAdminUnlock}
+                        className="bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold py-3 px-8 rounded uppercase tracking-wider transition-colors"
+                      >
+                        Admin: Close Terminal
+                      </button>
+                    </div>
+                  </div>
+                ) : !studentUnlocked ? (
                   <div className="max-w-xl mx-auto bg-slate-950 p-6 rounded-lg border border-emerald-800/80 space-y-5">
                     <div className="flex items-start justify-between border-b border-slate-800 pb-4 gap-4">
                       <div>
@@ -2379,7 +2417,7 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                           onClick={this.handleExitStudentKiosk}
                           className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3 py-1.5 rounded font-bold transition-colors"
                         >
-                          🔒 EXIT KIOSK
+                          🔒 SUBMIT & EXIT
                         </button>
                       </div>
                     </div>
@@ -2621,6 +2659,20 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                       value={subjectCode}
                       onChange={(e) => this.setState({ subjectCode: e.target.value })}
                       className="w-full bg-slate-950 border border-slate-700 rounded p-3 text-slate-100 focus:outline-none focus:border-cyan-500 font-mono text-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="admin-token" className="block text-xs uppercase tracking-wider text-cyan-400 mb-1">
+                      🔑 Key A: Admin Controller Token
+                    </label>
+                    <input
+                      id="admin-token"
+                      type="password"
+                      value={this.state.adminToken || ''}
+                      onChange={(e) => this.setState({ adminToken: e.target.value })}
+                      placeholder="Enter admin cryptographic token"
+                      className="w-full bg-slate-950 border border-cyan-700/60 rounded p-3 text-cyan-200 focus:outline-none focus:border-cyan-400 font-mono text-sm"
                     />
                   </div>
 
