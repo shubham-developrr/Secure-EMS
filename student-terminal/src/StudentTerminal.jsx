@@ -846,71 +846,72 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                   })()}
                 </div>
 
-                {/* Focus Lost Security Warning Modal */}
-                {focusLostModal && (
-                  <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
-                    <div className="bg-red-950 border-2 border-red-600 rounded-lg p-6 max-w-md w-full space-y-4 text-center shadow-2xl">
-                      <div className="text-4xl animate-bounce">⚠️</div>
-                      <h3 className="text-lg font-extrabold text-red-300 uppercase tracking-wider">
-                        SECURITY VIOLATION DETECTED
-                      </h3>
-                      <p className="text-sm text-red-200 font-mono">
-                        Window focus was lost or tab switched! This security event has been logged to the central server audit trail.
-                      </p>
-                      <div className="bg-slate-950 p-3 rounded text-xs font-mono text-slate-400 text-left space-y-1">
-                        <div>Roll No: {studentRoll}</div>
-                        <div>Seat ID: {studentSeat}</div>
-                        <div>Total Violations: {studentViolationsCount}</div>
-                      </div>
-                      <button
-                        onClick={() => this.setState({ focusLostModal: false })}
-                        className="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-2.5 rounded transition-colors text-sm"
-                      >
-                        RESUME SECURE SESSION & RE-VERIFY
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Secret Exit Dialog */}
-                {this.state.secretExitModal && (
-                  <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
-                    <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 max-w-sm w-full shadow-2xl">
-                      <h3 className="text-lg font-bold text-slate-200 mb-4 text-center uppercase tracking-widest">
-                        Admin override
-                      </h3>
-                      <form onSubmit={this.handleSecretExit} className="space-y-4">
-                        <input
-                          type="password"
-                          value={this.state.secretExitPin}
-                          onChange={(e) => this.setState({ secretExitPin: e.target.value })}
-                          className="w-full bg-slate-950 border-b-2 border-slate-700 focus:border-amber-500 text-center text-2xl tracking-widest text-white px-4 py-2 outline-none rounded-t"
-                          placeholder="***"
-                          autoFocus
-                        />
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => this.setState({ secretExitModal: false, secretExitPin: '' })}
-                            className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2 rounded"
-                          >
-                            CANCEL
-                          </button>
-                          <button
-                            type="submit"
-                            className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold py-2 rounded"
-                          >
-                            EXIT
-                          </button>
-                        </div>
-                      </form>
-                    </div>
-                  </div>
-                )}
               </div>
             )}
           </div>
         </div>
+
+        {/* Focus Lost Security Warning Modal */}
+        {focusLostModal && (
+          <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <div className="bg-red-950 border-2 border-red-600 rounded-lg p-6 max-w-md w-full space-y-4 text-center shadow-2xl">
+              <div className="text-4xl animate-bounce">⚠️</div>
+              <h3 className="text-lg font-extrabold text-red-300 uppercase tracking-wider">
+                SECURITY VIOLATION DETECTED
+              </h3>
+              <p className="text-sm text-red-200 font-mono">
+                Window focus was lost or tab switched! This security event has been logged to the central server audit trail.
+              </p>
+              <div className="bg-slate-950 p-3 rounded text-xs font-mono text-slate-400 text-left space-y-1">
+                <div>Roll No: {studentRoll}</div>
+                <div>Seat ID: {studentSeat}</div>
+                <div>Total Violations: {studentViolationsCount}</div>
+              </div>
+              <button
+                onClick={() => this.setState({ focusLostModal: false })}
+                className="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-2.5 rounded transition-colors text-sm"
+              >
+                RESUME SECURE SESSION & RE-VERIFY
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Secret Exit Dialog */}
+        {this.state.secretExitModal && (
+          <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 max-w-sm w-full shadow-2xl">
+              <h3 className="text-lg font-bold text-slate-200 mb-4 text-center uppercase tracking-widest">
+                Admin override
+              </h3>
+              <form onSubmit={this.handleSecretExit} className="space-y-4">
+                <input
+                  type="password"
+                  value={this.state.secretExitPin}
+                  onChange={(e) => this.setState({ secretExitPin: e.target.value })}
+                  className="w-full bg-slate-950 border-b-2 border-slate-700 focus:border-amber-500 text-center text-2xl tracking-widest text-white px-4 py-2 outline-none rounded-t"
+                  placeholder="***"
+                  autoFocus
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => this.setState({ secretExitModal: false, secretExitPin: '' })}
+                    className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2 rounded"
+                  >
+                    CANCEL
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold py-2 rounded"
+                  >
+                    EXIT
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

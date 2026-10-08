@@ -1,5 +1,6 @@
-const { app, BrowserWindow, ipcMain, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, protocol, net } = require('electron');
 const path = require('path');
+const url = require('url');
 
 let mainWindow;
 
@@ -25,13 +26,25 @@ function createWindow() {
   });
 
   if (app.isPackaged) {
-    mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html'));
+    mainWindow.loadURL('app://index.html');
   } else {
-    mainWindow.loadURL('http://localhost:5173');
+    mainWindow.loadURL('app://index.html');
   }
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  protocol.handle('app', (request) => {
+    let requestUrl = request.url.slice('app://'.length);
+    // If it's exactly app:// or app://index.html
+    if (requestUrl === '' || requestUrl === '/' || requestUrl === 'index.html') {
+      return net.fetch(url.pathToFileURL(path.join(__dirname, 'dist', 'index.html')).toString());
+    }
+    // Remove leading slash if any
+    if (requestUrl.startsWith('/')) requestUrl = requestUrl.slice(1);
+    return net.fetch(url.pathToFileURL(path.join(__dirname, 'dist', requestUrl)).toString());
+  });
+  createWindow();
+});
 
 // IPC handler to safely quit the app when admin unlocks
 ipcMain.on('admin-quit', () => {

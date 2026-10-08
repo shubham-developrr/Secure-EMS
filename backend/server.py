@@ -38,6 +38,24 @@ def is_readable_text(text: str) -> bool:
     has_spaces_or_newlines = ' ' in text or '\n' in text
     return ratio > 0.50 and (has_spaces_or_newlines or len(text) < 40)
 
+def is_valid_decrypted_content(text: str) -> bool:
+    """Check if decrypted bytes represent valid question paper content (text or JSON with pages/dataUrl)."""
+    if not text or len(text.strip()) == 0:
+        return False
+    stripped = text.strip()
+    # Allow JSON payloads (image pages or PDF dataUrl)
+    if stripped.startswith('{'):
+        try:
+            import json
+            obj = json.loads(stripped)
+            # Valid if it has pages array, dataUrl, or text field
+            if any(k in obj for k in ('pages', 'dataUrl', 'text')):
+                return True
+        except Exception:
+            pass
+    # Allow plain readable text
+    return is_readable_text(text)
+
 def decrypt_question_paper(encrypted_data: bytes, sup_key: str, adm_key: str) -> str:
     fernet_classes: list = []
     try:
@@ -56,9 +74,9 @@ def decrypt_question_paper(encrypted_data: bytes, sup_key: str, adm_key: str) ->
 
                 s1_bytes = f_sup.decrypt(encrypted_data)
                 s2_bytes = f_adm.decrypt(s1_bytes)
-                text = s2_bytes.decode('utf-8', errors='ignore')
-                if text and len(text.strip()) > 0:
-                    return text
+                text = s2_bytes.decode('utf-8', errors='replace')
+                if is_valid_decrypted_content(text):
+                    return text.replace('\ufffd', '')
             except Exception:
                 pass
 
@@ -71,9 +89,9 @@ def decrypt_question_paper(encrypted_data: bytes, sup_key: str, adm_key: str) ->
 
                 s1_bytes = f_adm.decrypt(encrypted_data)
                 s2_bytes = f_sup.decrypt(s1_bytes)
-                text = s2_bytes.decode('utf-8', errors='ignore')
-                if text and len(text.strip()) > 0:
-                    return text
+                text = s2_bytes.decode('utf-8', errors='replace')
+                if is_valid_decrypted_content(text):
+                    return text.replace('\ufffd', '')
             except Exception:
                 pass
 
@@ -81,9 +99,9 @@ def decrypt_question_paper(encrypted_data: bytes, sup_key: str, adm_key: str) ->
     for FernetClass in fernet_classes:
         try:
             f = FernetClass(sup_key.encode('utf-8') if isinstance(sup_key, str) else sup_key)
-            text = f.decrypt(encrypted_data).decode('utf-8', errors='ignore')
-            if is_readable_text(text):
-                return text
+            text = f.decrypt(encrypted_data).decode('utf-8', errors='replace')
+            if is_valid_decrypted_content(text):
+                return text.replace('\ufffd', '')
         except Exception:
             pass
 
@@ -91,9 +109,9 @@ def decrypt_question_paper(encrypted_data: bytes, sup_key: str, adm_key: str) ->
     for FernetClass in fernet_classes:
         try:
             f = FernetClass(adm_key.encode('utf-8') if isinstance(adm_key, str) else adm_key)
-            text = f.decrypt(encrypted_data).decode('utf-8', errors='ignore')
-            if is_readable_text(text):
-                return text
+            text = f.decrypt(encrypted_data).decode('utf-8', errors='replace')
+            if is_valid_decrypted_content(text):
+                return text.replace('\ufffd', '')
         except Exception:
             pass
 
