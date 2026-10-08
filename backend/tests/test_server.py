@@ -8,6 +8,44 @@ import server
 
 client = TestClient(server.app)
 
+from cloud_db_driver import get_db_connection
+import hashlib
+import json
+
+def _setup_test_db():
+    import base64
+    class CustomFernet:
+        def __init__(self, key):
+            self.key = key if isinstance(key, bytes) else key.encode('utf-8')
+        def encrypt(self, data: bytes) -> bytes:
+            k = hashlib.sha256(self.key).digest()
+            xored = bytes(b ^ k[i % len(k)] for i, b in enumerate(data))
+            return base64.urlsafe_b64encode(xored)
+
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("INSERT INTO users (username, password_hash, role_id) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING", ("supervisor_center1", "hash", 1))
+        c.execute(
+            "INSERT INTO exam_centers (center_code, center_name, authorized_device_mac, pin_hash) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+            ("CTR-101", "Test Center 101", "mac-101", hashlib.sha256(b"246810").hexdigest())
+        )
+        c.execute(
+            "INSERT INTO question_papers (subject_code, encrypted_file_path, scheduled_unlock_time, encryption_key, admin_key, supervisor_key, uploaded_by) VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
+            ("MATH-210", "dummy.enc", "2020-01-01 00:00:00", "ESNvPpFSPmy-aVdzN-flAhclqYxx0esE0MddouDtM4U=", "ESNvPpFSPmy-aVdzN-flAhclqYxx0esE0MddouDtM4U=", "246810", 1)
+        )
+        f_adm = CustomFernet(b"ESNvPpFSPmy-aVdzN-flAhclqYxx0esE0MddouDtM4U=")
+        f_sup = CustomFernet(b"246810")
+        text = b'mock content'
+        stage1 = f_adm.encrypt(text)
+        stage2 = f_sup.encrypt(stage1)
+        with open("dummy.enc", "wb") as f:
+            f.write(stage2)
+        conn.commit()
+    except Exception as e:
+        print("Test DB setup failed:", e)
+
+_setup_test_db()
 
 def test_decrypt_rejects_missing_admin_token():
     response = client.post(

@@ -10,7 +10,7 @@ def test():
     from cloud_db_driver import get_db_connection
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("INSERT INTO exam_centers (center_code, center_name, pin_hash) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING", ("CTR-999", "Test", "hash"))
+    c.execute("INSERT INTO exam_centers (center_code, center_name, authorized_device_mac, pin_hash) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING", ("CTR-999", "Test", "mac-999", "hash"))
     c.execute("INSERT INTO users (username, password_hash) VALUES (%s, %s) ON CONFLICT DO NOTHING", ("tester", "hash"))
     conn.commit()
     print("DB setup complete.")

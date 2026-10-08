@@ -817,8 +817,8 @@ def fetch_student_paper(payload: StudentPaperRequest, request: Request):
     center_row = cursor.fetchone()
     if not center_row:
         cursor.execute(
-            "INSERT INTO exam_centers (center_code, center_name, location) VALUES (?, ?, ?)",
-            (payload.center_code.upper(), f"Exam Center {payload.center_code.upper()}", "Exam Hall Zone 1")
+            "INSERT INTO exam_centers (center_code, center_name, authorized_device_mac) VALUES (?, ?, ?)",
+            (payload.center_code.upper(), f"Exam Center {payload.center_code.upper()}", f"MAC-{payload.center_code.upper()}")
         )
         conn.commit()
         # Explicit proxy fetch mimicking lastrowid
