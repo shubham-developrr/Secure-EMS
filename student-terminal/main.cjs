@@ -1,9 +1,7 @@
 const { app, BrowserWindow, ipcMain, Menu } = require('electron');
 const path = require('path');
-const { spawn } = require('child_process');
 
 let mainWindow;
-let backendProcess;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -27,12 +25,6 @@ function createWindow() {
   });
 
   if (app.isPackaged) {
-    const backendPath = path.join(process.resourcesPath, 'dist-backend', 'server.exe');
-    try {
-      backendProcess = spawn(backendPath);
-    } catch (e) {
-      console.error('Failed to start backend', e);
-    }
     mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html'));
   } else {
     mainWindow.loadURL('http://localhost:5173');
@@ -48,9 +40,6 @@ ipcMain.on('admin-quit', () => {
 });
 
 app.on('window-all-closed', () => {
-  if (backendProcess) {
-    backendProcess.kill();
-  }
   if (process.platform !== 'darwin') {
     app.quit();
   }
