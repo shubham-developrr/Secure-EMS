@@ -455,7 +455,7 @@ def upload_question_paper(payload: PaperUploadRequest, request: Request):
         INSERT INTO question_papers (subject_code, encrypted_file_path, scheduled_unlock_time, encryption_key, admin_key, supervisor_key, uploaded_by, blockchain_tx_hash, paper_hash, on_chain_status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (clean_subject, file_path, scheduled_time, admin_key.decode('utf-8'), admin_key.decode('utf-8'), hash_pin(supervisor_key.decode('utf-8')), user_id, tx_hash, paper_hash, "CONFIRMED")
+        (clean_subject, file_path, scheduled_time, admin_key.decode('utf-8'), admin_key.decode('utf-8'), supervisor_key.decode('utf-8'), user_id, tx_hash, paper_hash, "CONFIRMED")
     )
     conn.commit()
     conn.close()
@@ -616,7 +616,7 @@ def decrypt_paper(payload: DecryptRequest, request: Request):
     is_valid_pin = (
         (center_row["pin_hash"] and center_row["pin_hash"] == input_hash)
         or raw_pin in ("246810", "4567")
-        or (stored_sup_key and input_hash == stored_sup_key)
+        or (stored_sup_key and (raw_pin == stored_sup_key or input_hash == stored_sup_key))
     )
 
     if not is_valid_pin:
@@ -651,6 +651,19 @@ def decrypt_paper(payload: DecryptRequest, request: Request):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Security Violation: Exam time-lock window opens at {scheduled_time_str}. Decryption blocked.",
+        )
+
+    if not payload.admin_token or not payload.admin_token.strip():
+        log_audit_event(user_id=user_id, center_id=center_id, action_type="MISSING_ADMIN_TOKEN", details=f"Missing admin token for subject {payload.subject_code}", ip_address=client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin Token (Key A) missing. Two-key decryption requires valid token.",
+        )
+    if payload.admin_token.strip() != adm_key:
+        log_audit_event(user_id=user_id, center_id=center_id, action_type="INVALID_ADMIN_TOKEN", details=f"Invalid admin token for subject {payload.subject_code}", ip_address=client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid Admin Token (Key A).",
         )
 
     # 5. Perform Dual-Key 2-Stage Cryptographic Decryption
