@@ -328,9 +328,9 @@ export default class AdminTerminal extends React.Component {
     const pagesDataUrls = imagePages.map((p) => p.dataUrl);
 
     let paperPayload;
-    if (pagesDataUrls.length > 0) {
+    if (isImageMode && pagesDataUrls.length > 0) {
       paperPayload = JSON.stringify({ text: newPaperText, pages: pagesDataUrls });
-    } else if (pdfDataUrl) {
+    } else if (uploadMode === 'pdf' && pdfDataUrl) {
       paperPayload = JSON.stringify({ dataUrl: pdfDataUrl, text: newPaperText });
     } else {
       paperPayload = newPaperText;

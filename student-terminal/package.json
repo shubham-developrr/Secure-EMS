@@ -38,7 +38,7 @@
       "output": "release"
     },
     "win": {
-      "target": "nsis"
+      "target": "portable"
     },
     "files": [
       "dist/**/*",
