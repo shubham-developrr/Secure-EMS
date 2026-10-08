@@ -645,7 +645,8 @@ def decrypt_paper(payload: DecryptRequest, request: Request):
         except ValueError:
             scheduled_time = datetime.fromisoformat(scheduled_time_str)
 
-    current_time = datetime.now()
+    # Force IST (India Standard Time, UTC+5:30) for timezone-safe validation
+    current_time = datetime.utcnow() + timedelta(hours=5, minutes=30)
     if current_time < scheduled_time:
         log_audit_event(user_id=user_id, center_id=center_id, action_type="TIME_LOCK_SECURITY_BLOCK", details=f"Early decryption attempt blocked. Scheduled for {scheduled_time_str}", ip_address=client_ip)
         raise HTTPException(
@@ -871,7 +872,8 @@ def fetch_student_paper(payload: StudentPaperRequest, request: Request):
         except ValueError:
             scheduled_time = datetime.fromisoformat(scheduled_time_str)
 
-    current_time = datetime.now()
+    # Force IST (India Standard Time, UTC+5:30) for timezone-safe validation
+    current_time = datetime.utcnow() + timedelta(hours=5, minutes=30)
     if current_time < scheduled_time:
         log_audit_event(
             center_id=center_id,
