@@ -93,6 +93,8 @@ export default class ExamDashboard extends React.Component {
       uploadMode: 'image_pagewise',
       imagePages: [],
       newSubjectCode: 'MATH-201',
+      selectedScheduleId: '',
+      pendingSchedules: [],
       newPaperText: 'CONFIDENTIAL CENTRAL UNIVERSITY EXAMINATION 2026\nSubject: Mathematics (MATH-201)\nMax Marks: 100 | Time Allowed: 3 Hours\n\nQ1. Evaluate the definite integral of sin^2(x) from 0 to pi.\nQ2. Solve the linear differential equation dy/dx + P(x)y = Q(x).\nQ3. State and prove Cayley-Hamilton Theorem.',
       newDelaySeconds: 15,
       pdfFile: null,
@@ -168,7 +170,8 @@ export default class ExamDashboard extends React.Component {
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Failed to publish paper.');
       this.setState({ publishSuccess: true });
-      this.loadScheduledExams();
+      this.loadPendingSchedules();
+    this.loadScheduledExams();
     } catch (err) {
       this.setState({ error: err.message });
     } finally {
@@ -197,6 +200,7 @@ export default class ExamDashboard extends React.Component {
     this.loadStudentStatuses();
     this.fetchPersonnelStatus();
     this.loadRegisteredCentersForSchedule();
+    this.loadPendingSchedules();
     this.loadScheduledExams();
     this.loadBlockchainLedger();
     this.fetchStudentPhoto(this.state.studentRoll);
@@ -270,6 +274,18 @@ export default class ExamDashboard extends React.Component {
       availableCentersForSchedule: list,
       scheduleCenterCode: list[0]?.center_code || 'CTR-101',
     });
+  };
+
+  loadPendingSchedules = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/scheduled-exams`);
+      const data = await response.json();
+      if (response.ok && Array.isArray(data.scheduled_exams)) {
+        this.setState({ pendingSchedules: data.scheduled_exams });
+      }
+    } catch (e) {
+      console.error('Failed to load scheduled exams', e);
+    }
   };
 
   loadScheduledExams = async () => {
@@ -764,6 +780,7 @@ export default class ExamDashboard extends React.Component {
         body: JSON.stringify({
           subject_code: newSubjectCode,
           paper_text: newPaperText,
+          schedule_id: this.state.selectedScheduleId,
           delay_seconds: parseInt(newDelaySeconds, 10) || 10,
           uploader_username: 'controller_verma',
         }),
@@ -1322,6 +1339,8 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
   render() {
     const {
       activeTab,
+      selectedScheduleId,
+      pendingSchedules,
       isUnlocked,
       username,
       centerCode,
@@ -1420,7 +1439,8 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                 onClick={() => {
                   this.setState({ activeTab: 'SCHEDULE' });
                   this.loadRegisteredCentersForSchedule();
-                  this.loadScheduledExams();
+                  this.loadPendingSchedules();
+    this.loadScheduledExams();
                 }}
                 className={`px-3 py-1.5 rounded text-xs font-semibold transition-all ${
                   activeTab === 'SCHEDULE'
@@ -1583,7 +1603,8 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                   <button
                     onClick={() => {
                       this.loadRegisteredCentersForSchedule();
-                      this.loadScheduledExams();
+                      this.loadPendingSchedules();
+    this.loadScheduledExams();
                     }}
                     className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-mono text-slate-300 px-3 py-1.5 rounded flex items-center gap-1.5 transition-colors"
                   >
@@ -2024,9 +2045,35 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                 )}
 
                 <form onSubmit={this.handleUploadPaper} className="space-y-5 bg-slate-950 p-6 rounded-lg border border-slate-800">
-                  <div className="grid grid-cols-1 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <label htmlFor="new-subject-code" className="block text-xs uppercase tracking-wider text-slate-400 mb-1">
+                      <label htmlFor="schedule-select-legacy" className="block text-xs uppercase tracking-wider text-slate-400 mb-1 font-mono flex items-center gap-2">
+                        <span>Link to Scheduled Exam</span>
+                        <span className="bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded text-[10px]">RECOMMENDED</span>
+                      </label>
+                      <select
+                        id="schedule-select-legacy"
+                        value={selectedScheduleId}
+                        onChange={(e) => {
+                          const sched = pendingSchedules.find(s => s.schedule_id === e.target.value);
+                          this.setState({
+                            selectedScheduleId: e.target.value,
+                            newSubjectCode: sched ? sched.subject_code : this.state.newSubjectCode
+                          });
+                        }}
+                        className="w-full bg-slate-900 border border-slate-700 rounded p-3 text-slate-100 font-mono text-sm focus:outline-none focus:border-amber-500 appearance-none"
+                      >
+                        <option value="">-- Select Scheduled Exam --</option>
+                        {pendingSchedules.map(sched => (
+                          <option key={sched.schedule_id} value={sched.schedule_id}>
+                            {sched.subject_code} @ {sched.center_code} ({sched.exam_date} {sched.exam_time})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label htmlFor="new-subject-code" className="block text-xs uppercase tracking-wider text-slate-400 mb-1 font-mono">
                         Subject Code
                       </label>
                       <input
@@ -2038,7 +2085,6 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                         className="w-full bg-slate-900 border border-slate-700 rounded p-3 text-slate-100 font-mono text-sm focus:outline-none focus:border-amber-500"
                       />
                     </div>
-
                   </div>
 
                   {/* Pagewise Image Upload UI */}
