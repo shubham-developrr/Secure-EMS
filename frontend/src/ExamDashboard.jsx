@@ -2467,13 +2467,31 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
 
                       {/* Exact Uploaded PDF Document Stream, Image Pages, or Clean Question Paper Payload */}
                       {(() => {
-                        const { text: activePaperText, pages: activePages } = this.getPaperDetails(studentPaperContent, studentSubjectCode);
+                        const { text: activePaperText, pages: activePages, dataUrl: pdfDataUrl } = this.getPaperDetails(studentPaperContent, studentSubjectCode);
                         const displayContent = activePaperText || this.getCleanPaperContent(studentPaperContent, studentSubjectCode);
 
                         if (activePages && activePages.length > 0) {
                           return (
                             <div className="w-full relative z-20">
                               <ImagePaperViewer pages={activePages} subjectCode={studentSubjectCode} title={`Official Question Paper (${studentSubjectCode})`} />
+                            </div>
+                          );
+                        }
+
+                        if (pdfDataUrl) {
+                          return (
+                            <div className="w-full relative z-20 h-full min-h-[600px] bg-slate-900 p-2 rounded-xl border border-slate-800 shadow-2xl">
+                              <div className="border-b border-slate-800 pb-2 mb-2 flex items-center justify-between px-2 text-xs font-mono">
+                                <span className="bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 rounded font-bold uppercase tracking-wider">
+                                  📄 OFFICIAL PDF QUESTION PAPER ({studentSubjectCode})
+                                </span>
+                                <span className="text-slate-400">Seat: {studentSeat}</span>
+                              </div>
+                              <iframe 
+                                src={`${pdfDataUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`} 
+                                className="w-full h-[600px] border-0 rounded"
+                                title={`Official Question Paper PDF (${studentSubjectCode})`}
+                              />
                             </div>
                           );
                         }
