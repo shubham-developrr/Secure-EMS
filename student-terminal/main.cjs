@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, protocol, net } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, protocol, net, globalShortcut } = require('electron');
 const path = require('path');
 const url = require('url');
 
@@ -43,13 +43,27 @@ app.whenReady().then(() => {
     if (requestUrl.startsWith('/')) requestUrl = requestUrl.slice(1);
     return net.fetch(url.pathToFileURL(path.join(__dirname, 'dist', requestUrl)).toString());
   });
+
   createWindow();
+
+  // Register global shortcut for secret admin exit (Ctrl+A)
+  // This fires even in kiosk mode and sends IPC to the renderer
+  globalShortcut.register('CommandOrControl+A', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('secret-exit-trigger');
+    }
+  });
 });
 
 // IPC handler to safely quit the app when admin unlocks
 ipcMain.on('admin-quit', () => {
   app.isQuitting = true;
+  globalShortcut.unregisterAll();
   app.quit();
+});
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
 });
 
 app.on('window-all-closed', () => {

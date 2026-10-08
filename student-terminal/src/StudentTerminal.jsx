@@ -103,6 +103,17 @@ export default class StudentTerminal extends React.Component {
     window.addEventListener('copy', this.preventStudentClipboard);
     window.addEventListener('cut', this.preventStudentClipboard);
     window.addEventListener('paste', this.preventStudentClipboard);
+
+    // Also listen for IPC event from Electron main process (Ctrl+A globalShortcut in kiosk mode)
+    try {
+      const { ipcRenderer } = window.require('electron');
+      ipcRenderer.on('secret-exit-trigger', () => {
+        this.setState({ secretExitModal: true, secretExitPin: '' });
+      });
+      this._ipcRenderer = ipcRenderer;
+    } catch (e) {
+      // Not running in Electron, skip
+    }
   }
 
   fetchStudentPhoto = async (roll) => {
@@ -141,6 +152,12 @@ export default class StudentTerminal extends React.Component {
     window.removeEventListener('copy', this.preventStudentClipboard);
     window.removeEventListener('cut', this.preventStudentClipboard);
     window.removeEventListener('paste', this.preventStudentClipboard);
+    // Clean up Electron IPC listener
+    try {
+      if (this._ipcRenderer) {
+        this._ipcRenderer.removeAllListeners('secret-exit-trigger');
+      }
+    } catch (e) {}
   }
 
   startHeartbeat = () => {
