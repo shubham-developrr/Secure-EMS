@@ -1,7 +1,7 @@
 import React from 'react';
 import ImagePaperViewer from './ImagePaperViewer.jsx';
 
-const API_BASE = 'https://secure-ems.onrender.com';
+const API_BASE = import.meta.env.PROD ? '' : 'http://localhost:8000';
 
 const ensurePdfBlobUrl = (content) => {
   if (!content || typeof content !== 'string') return '';
