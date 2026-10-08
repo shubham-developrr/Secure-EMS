@@ -1,6 +1,5 @@
 import React from 'react';
 import VerificationTerminal from './VerificationTerminal.jsx';
-import PdfCanvasViewer from './PdfCanvasViewer.jsx';
 import ImagePaperViewer from './ImagePaperViewer.jsx';
 
 const API_BASE = 'https://secure-ems.onrender.com';
@@ -2430,21 +2429,13 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
 
                       {/* Exact Uploaded PDF Document Stream, Image Pages, or Clean Question Paper Payload */}
                       {(() => {
-                        const { dataUrl: activePdfDataUrl, text: activePaperText, pages: activePages } = this.getPaperDetails(studentPaperContent, studentSubjectCode);
+                        const { text: activePaperText, pages: activePages } = this.getPaperDetails(studentPaperContent, studentSubjectCode);
                         const displayContent = activePaperText || this.getCleanPaperContent(studentPaperContent, studentSubjectCode);
 
                         if (activePages && activePages.length > 0) {
                           return (
                             <div className="w-full relative z-20">
                               <ImagePaperViewer pages={activePages} subjectCode={studentSubjectCode} title={`Official Question Paper (${studentSubjectCode})`} />
-                            </div>
-                          );
-                        }
-
-                        if (activePdfDataUrl) {
-                          return (
-                            <div className="w-full relative z-20">
-                              <PdfCanvasViewer pdfDataUrl={activePdfDataUrl} />
                             </div>
                           );
                         }
