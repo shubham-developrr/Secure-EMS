@@ -1,7 +1,7 @@
 import React from 'react';
 import ImagePaperViewer from './ImagePaperViewer';
 
-const API_BASE = 'https://secure-ems.onrender.com';
+const API_BASE = import.meta.env.PROD ? '' : 'http://localhost:8000';
 
 export default class AdminTerminal extends React.Component {
   constructor(props) {

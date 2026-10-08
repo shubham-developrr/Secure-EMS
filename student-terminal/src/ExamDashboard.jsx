@@ -2,7 +2,7 @@ import React from 'react';
 import VerificationTerminal from './VerificationTerminal.jsx';
 import ImagePaperViewer from './ImagePaperViewer.jsx';
 
-const API_BASE = 'https://secure-ems.onrender.com';
+const API_BASE = import.meta.env.PROD ? '' : 'http://localhost:8000';
 
 const ensurePdfBlobUrl = (content) => {
   if (!content || typeof content !== 'string') return '';
@@ -1313,20 +1313,7 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
       });
       this.loadAuditLogs();
     } catch (err) {
-      const isConnectionError = err.message && (err.message.includes('Failed to fetch') || err.message.includes('NetworkError') || err.message.includes('Load failed'));
-
-      if (isConnectionError && pin && adminToken) {
-        const fallbackText = this.getFallbackPaperText(subjectCode);
-        this.setState({
-          decryptedContent: fallbackText,
-          isUnlocked: true,
-          timeLeft: 900,
-          unlockedTimestamp: new Date().toLocaleString(),
-          error: '',
-        });
-      } else {
-        this.setState({ error: err.message });
-      }
+      this.setState({ error: err.message || 'Cryptographic decryption failed. Cannot reach server.' });
     } finally {
       this.setState({ loading: false });
     }
@@ -1373,8 +1360,10 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
       studentSecurityAlert,
       focusLostModal,
       studentStatuses,
-      kioskSubmitted,
-      adminUnlockPin,
+      kioskSubmitted,
+
+      adminUnlockPin,
+
       personnelData,
       personnelLoading,
       scheduleCenterCode,

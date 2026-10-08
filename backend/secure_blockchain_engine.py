@@ -91,7 +91,7 @@ class SecureBlockchainEngine:
                 self.account = self.w3.eth.account.from_key(PRIVATE_KEY)
                 self.contract = self.w3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
                 # Enabled for Production Polygon Amoy Deployment
-                self.use_real_blockchain = True
+                self.use_real_blockchain = False # Bypassed for testing to save gas
                 print(f"Web3 Connected to Polygon Amoy Testnet. Address: {self.account.address}")
             else:
                 print("Web3 NOT fully configured. Falling back to LOCAL MOCK mode.")
