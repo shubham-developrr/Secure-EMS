@@ -1,0 +1,61 @@
+name: Build Android Student Kiosk APK
+
+on:
+  push:
+    branches: [ main, master, 'arena/**' ]
+    paths:
+      - 'student-terminal/**'
+      - '.github/workflows/android-kiosk-apk.yml'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-android-kiosk:
+    name: Compile Android Student Kiosk APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Student Terminal Dependencies & Sync Capacitor Android
+        working-directory: student-terminal
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: |
+          npm install
+          npm run cap:sync
+
+      - name: Run Student Terminal Unit Tests
+        working-directory: student-terminal
+        run: |
+          npm test -- --run
+
+      - name: Build Android Kiosk Debug APK via Gradle
+        working-directory: student-terminal/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/Secure-EMS-Student-Kiosk.apk
+
+      - name: Upload Android Student Kiosk APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Secure-EMS-Student-Kiosk-APK
+          path: student-terminal/android/app/build/outputs/apk/debug/Secure-EMS-Student-Kiosk.apk
+          retention-days: 30

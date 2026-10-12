@@ -216,6 +216,9 @@ class StudentHeartbeatRequest(BaseModel):
     subject_code: str
     status: str = "ACTIVE"
     violations_count: int = 0
+    device_type: Optional[str] = "DESKTOP_KIOSK"
+    lock_task_state: Optional[str] = "LOCKED"
+    battery_level: Optional[int] = 100
 
 class StudentVerificationRequest(BaseModel):
     roll_number: str
@@ -450,9 +453,9 @@ def upload_question_paper(payload: PaperUploadRequest, request: Request):
             scheduled_time = dt.strftime("%Y-%m-%d %H:%M:%S")
         else:
             print(f"Failed to parse date/time: {date_str} {time_str}, falling back to delay_seconds.")
-            scheduled_time = (datetime.now() + timedelta(seconds=payload.delay_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+            scheduled_time = (datetime.utcnow() + timedelta(hours=5, minutes=30, seconds=payload.delay_seconds)).strftime("%Y-%m-%d %H:%M:%S")
     else:
-        scheduled_time = (datetime.now() + timedelta(seconds=payload.delay_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+        scheduled_time = (datetime.utcnow() + timedelta(hours=5, minutes=30, seconds=payload.delay_seconds)).strftime("%Y-%m-%d %H:%M:%S")
 
     # 4. Anchor payload on Blockchain Ledger
     record_id = f"PAPER_{clean_subject}"
@@ -1014,6 +1017,9 @@ def receive_student_heartbeat(payload: StudentHeartbeatRequest, request: Request
         "subject_code": payload.subject_code,
         "status": payload.status,
         "violations_count": payload.violations_count,
+        "device_type": getattr(payload, "device_type", "DESKTOP_KIOSK") or "DESKTOP_KIOSK",
+        "lock_task_state": getattr(payload, "lock_task_state", "LOCKED") or "LOCKED",
+        "battery_level": getattr(payload, "battery_level", 100) if getattr(payload, "battery_level", None) is not None else 100,
         "last_ping": datetime.now().isoformat(),
         "last_ping_ts": datetime.now().timestamp(),
         "ip_address": client_ip,
@@ -1028,7 +1034,7 @@ def get_supervisor_student_status():
         elapsed = current_ts - data["last_ping_ts"]
         if elapsed > 10.0:
             terminal_status = "OFFLINE"
-        elif data["violations_count"] > 0 or data.get("status") == "FOCUS_LOSS":
+        elif data["violations_count"] > 0 or data.get("status") in ("FOCUS_LOSS", "PIN_BREACH", "DISPLAY_BREACH"):
             terminal_status = "VIOLATION"
         else:
             terminal_status = "ACTIVE"
@@ -1040,6 +1046,9 @@ def get_supervisor_student_status():
             "subject_code": data["subject_code"],
             "status": terminal_status,
             "violations_count": data["violations_count"],
+            "device_type": data.get("device_type", "DESKTOP_KIOSK"),
+            "lock_task_state": data.get("lock_task_state", "LOCKED"),
+            "battery_level": data.get("battery_level", 100),
             "last_ping": data["last_ping"],
             "seconds_since_ping": round(elapsed, 1),
             "ip_address": data["ip_address"]

@@ -1,0 +1,26 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportHeight="108"
+    android:viewportWidth="108">
+    <!-- Outer Emerald Security Shield -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M54,24L30,34V52C30,68.8 40.2,84.4 54,89C67.8,84.4 78,68.8 78,52V34L54,24Z" />
+    <!-- Inner Dark Slate Shield -->
+    <path
+        android:fillColor="#0F172A"
+        android:pathData="M54,29L34,37.4V52C34,66.2 42.5,79.4 54,83.6C65.5,79.4 74,66.2 74,52V37.4L54,29Z" />
+    <!-- Gold Kiosk Padlock Body -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M45,51H63C64.1,51 65,51.9 65,53V66C65,67.1 64.1,68 63,68H45C43.9,68 43,67.1 43,66V53C43,51.9 43.9,51 45,51Z" />
+    <!-- Gold Kiosk Padlock Shackle -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M48,51V46C48,42.7 50.7,40 54,40C57.3,40 60,42.7 60,46V51H57V46C57,44.3 55.7,43 54,43C52.3,43 51,44.3 51,46V51H48Z" />
+    <!-- Keyhole -->
+    <path
+        android:fillColor="#020617"
+        android:pathData="M54,57C55.1,57 56,57.9 56,59C56,59.7 55.6,60.4 55,60.7V64H53V60.7C52.4,60.4 52,59.7 52,59C52,57.9 52.9,57 54,57Z" />
+</vector>
