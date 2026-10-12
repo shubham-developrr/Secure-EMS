@@ -14,11 +14,6 @@ import {
 
 const RENDER_PRIMARY_URL = 'https://secure-ems-backend.onrender.com';
 const RENDER_FALLBACK_URL = 'https://secure-ems.onrender.com';
-const API_BASE =
-  import.meta.env.VITE_API_URL ||
-  (typeof window !== 'undefined' && window.location.protocol.startsWith('http') && import.meta.env.PROD
-    ? ''
-    : RENDER_PRIMARY_URL);
 
 const formatSecondsAsClock = (totalSeconds) => {
   const safe = Math.max(0, Number(totalSeconds) || 0);
@@ -179,7 +174,7 @@ export default class StudentTerminal extends React.Component {
       pdfRenderedPages: [],
       pdfRendering: false,
       // Android & Mobile/Tablet Kiosk state
-      apiBaseUrl: API_BASE,
+      apiBaseUrl: RENDER_PRIMARY_URL,
       orientationMode: 'unspecified',
       kioskPlatform: detectedPlatform,
       kioskStatus: {
@@ -215,6 +210,15 @@ export default class StudentTerminal extends React.Component {
   }
 
   componentDidMount() {
+    this.unsubscribeNativeViolations = subscribeNativeViolations(this.handleNativeAndroidViolation);
+
+    if (this.state.kioskPlatform === 'android') {
+      enableKioskLockdown({ orientation: this.state.orientationMode }).catch((error) => {
+        console.warn('Could not activate Android kiosk lockdown on launch', error);
+      });
+      this.kioskStatusTimer = setInterval(this.refreshKioskSecurityStatus, 1500);
+    }
+
     this.fetchStudentPhoto(this.state.studentRoll);
     this.refreshKioskSecurityStatus();
 
@@ -230,9 +234,6 @@ export default class StudentTerminal extends React.Component {
     window.addEventListener('resize', this.handleStudentViewportResize);
     window.addEventListener('online', this.handleNetworkChange);
     window.addEventListener('offline', this.handleNetworkChange);
-
-    // Subscribe to native Android Kiosk hardware/OS security violation events
-    this.unsubscribeNativeViolations = subscribeNativeViolations(this.handleNativeAndroidViolation);
 
     // Also listen for IPC event from Electron main process (Ctrl+A globalShortcut in kiosk mode)
     try {
@@ -333,13 +334,20 @@ export default class StudentTerminal extends React.Component {
     try {
       const status = await getKioskSecurityStatus();
       if (status) {
-        this.setState({
+        this.setState((prev) => ({
           kioskStatus: status,
-          kioskPlatform: status.platform || this.state.kioskPlatform,
-        });
+          kioskPlatform: status.platform || prev.kioskPlatform,
+          pinBreachModal:
+            prev.studentUnlocked &&
+            status.platform === 'android' &&
+            status.isLockTaskActive === false
+              ? true
+              : prev.pinBreachModal,
+        }));
       }
+      return status || null;
     } catch {
-      // Ignore
+      return null;
     }
   };
 
@@ -529,7 +537,11 @@ export default class StudentTerminal extends React.Component {
     this.heartbeatTimer = setInterval(this.sendHeartbeat, 3000);
 
     if (this.kioskStatusTimer) clearInterval(this.kioskStatusTimer);
-    this.kioskStatusTimer = setInterval(this.refreshKioskSecurityStatus, 4000);
+    const kioskStatusPollInterval = this.state.kioskPlatform === 'android' ? 1500 : 4000;
+    this.kioskStatusTimer = setInterval(
+      this.refreshKioskSecurityStatus,
+      kioskStatusPollInterval
+    );
 
     if (this.examClockTimer) clearInterval(this.examClockTimer);
     this.examClockTimer = setInterval(() => {
@@ -747,13 +759,41 @@ export default class StudentTerminal extends React.Component {
   };
 
   handleResumeFromFocusLoss = async () => {
-    await enableKioskLockdown({ orientation: this.state.orientationMode });
-    await this.refreshKioskSecurityStatus();
+    try {
+      await enableKioskLockdown({ orientation: this.state.orientationMode });
+    } catch (error) {
+      console.warn('Could not re-activate Android kiosk lockdown', error);
+    }
+
+    const status = await this.refreshKioskSecurityStatus();
+    const isAndroidKiosk =
+      this.state.kioskPlatform === 'android' || status?.platform === 'android';
+
+    if (isAndroidKiosk && status?.isLockTaskActive !== true) {
+      this.setState({
+        focusLostModal: false,
+        pinBreachModal: true,
+        displayBreachModal: false,
+        studentSecurityAlert:
+          'Screen pinning is still inactive. Tap “Got it” / “Pin” on the Android prompt, or enable Settings → Security → App Pinning, then try again.',
+      });
+      return;
+    }
+
     this.setState({
       focusLostModal: false,
       pinBreachModal: false,
       displayBreachModal: false,
     });
+  };
+
+  handlePinAndroidScreen = async () => {
+    try {
+      await enableKioskLockdown({ orientation: this.state.orientationMode });
+    } catch (error) {
+      console.warn('Could not request Android screen pinning', error);
+    }
+    await this.refreshKioskSecurityStatus();
   };
 
   handleStudentLogin = async (e) => {
@@ -1138,6 +1178,7 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
       kioskSubmitted,
       adminUnlockPin,
       orientationMode,
+      kioskPlatform,
       kioskStatus,
       examRemainingSeconds,
       textFontScale,
@@ -1364,6 +1405,28 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                     <div>✓ Tapjacking Overlay Filter</div>
                     <div>✓ System Clipboard Auto-Wipe</div>
                   </div>
+                  {kioskPlatform === 'android' && !kioskStatus.isLockTaskActive && (
+                    <div
+                      role="alert"
+                      aria-live="assertive"
+                      className="border border-amber-500 bg-amber-950/70 rounded p-3 space-y-2 text-amber-100"
+                    >
+                      <p className="font-bold">
+                        ⚠️ Android Screen Pinning is not active. Home swipes may leave the kiosk.
+                      </p>
+                      <p className="text-amber-200/90">
+                        Tap the Android “Got it” / “Pin” confirmation. If no prompt appears, enable
+                        Settings → Security → App Pinning and try again.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={this.handlePinAndroidScreen}
+                        className="w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold py-2.5 px-3 rounded text-xs transition-colors"
+                      >
+                        📌 PIN ANDROID SCREEN NOW (LOCK HOME SWIPE)
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {studentError && (
@@ -1875,6 +1938,10 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
               <p className="text-sm text-red-200 font-mono">
                 Question paper access is suspended because Android LockTask / Screen Pinning was exited.
                 This violation has been reported to the Center Supervisor.
+              </p>
+              <p className="text-xs text-amber-200 font-mono">
+                If Android shows a confirmation prompt, tap “Got it” / “Pin”. If it does not appear,
+                enable Settings → Security → App Pinning, then tap the button again.
               </p>
               <div className="bg-slate-950 p-3 rounded text-xs font-mono text-slate-400 text-left space-y-1">
                 <div>Roll No: {studentRoll}</div>

@@ -1,50 +1,163 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+
+const MIN_ZOOM = 0.6;
+const MAX_ZOOM = 4;
+const ZOOM_STEP = 0.2;
+
+const clampZoom = (value) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number(value) || 1));
+const getDistance = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
 
 export default function ImagePaperViewer({ pages = [], title = 'Question Paper', subjectCode = '' }) {
   const [currentPage, setCurrentPage] = useState(0);
   const [zoom, setZoom] = useState(1);
-  const [fitWidth, setFitWidth] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [viewLayout, setViewLayout] = useState('single'); // 'single' | 'continuous' | 'grid'
-  const containerRef = useRef(null);
 
-  const prevPagesKeyRef = useRef('');
+  const normalStageRef = useRef(null);
+  const fullscreenStageRef = useRef(null);
+  const closeFullscreenRef = useRef(null);
+  const fullscreenButtonRef = useRef(null);
+  const previousFullscreenRef = useRef(false);
+  const previousPagesKeyRef = useRef('');
+  const zoomRef = useRef(1);
+  const pointersRef = useRef(new Map());
+  const gestureRef = useRef(null);
+  const pendingScrollRef = useRef(null);
+  const scrollFrameRef = useRef(null);
 
-  // Only reset zoom & page when pages content actually changes (not on array reference change)
+  const updateZoom = (value) => {
+    const nextZoom = Number(clampZoom(value).toFixed(2));
+    zoomRef.current = nextZoom;
+    setZoom(nextZoom);
+    return nextZoom;
+  };
+
+  const queueStageScroll = (stage, scrollLeft, scrollTop) => {
+    pendingScrollRef.current = { stage, scrollLeft, scrollTop };
+    if (scrollFrameRef.current !== null) return;
+
+    const flushScroll = () => {
+      scrollFrameRef.current = null;
+      const pending = pendingScrollRef.current;
+      pendingScrollRef.current = null;
+      if (!pending || !pending.stage?.isConnected) return;
+      pending.stage.scrollLeft = Math.max(0, pending.scrollLeft);
+      pending.stage.scrollTop = Math.max(0, pending.scrollTop);
+    };
+
+    if (typeof window !== 'undefined' && window.requestAnimationFrame) {
+      scrollFrameRef.current = window.requestAnimationFrame(flushScroll);
+    } else {
+      scrollFrameRef.current = setTimeout(flushScroll, 0);
+    }
+  };
+
+  const zoomAroundStageCenter = (requestedZoom) => {
+    const stage = isFullscreen ? fullscreenStageRef.current : normalStageRef.current;
+    const previousZoom = zoomRef.current;
+    const nextZoom = clampZoom(requestedZoom);
+
+    if (stage && previousZoom !== nextZoom) {
+      const anchorX = stage.clientWidth / 2;
+      const anchorY = stage.clientHeight / 2;
+      const ratio = nextZoom / previousZoom;
+      queueStageScroll(
+        stage,
+        (stage.scrollLeft + anchorX) * ratio - anchorX,
+        (stage.scrollTop + anchorY) * ratio - anchorY
+      );
+    }
+    updateZoom(nextZoom);
+  };
+
+  const resetZoom = () => {
+    updateZoom(1);
+    [normalStageRef.current, fullscreenStageRef.current].forEach((stage) => {
+      if (stage) queueStageScroll(stage, 0, 0);
+    });
+  };
+
+  // Only reset page and zoom when paper contents change, not when React recreates the array.
   useEffect(() => {
     if (!pages || pages.length === 0) return;
     const currentKey = `${pages.length}_${pages[0]?.slice(0, 40)}_${pages[pages.length - 1]?.slice(0, 40)}`;
-    if (prevPagesKeyRef.current && prevPagesKeyRef.current !== currentKey) {
+    if (previousPagesKeyRef.current && previousPagesKeyRef.current !== currentKey) {
       setCurrentPage(0);
-      setZoom(1);
+      resetZoom();
     }
-    prevPagesKeyRef.current = currentKey;
+    previousPagesKeyRef.current = currentKey;
   }, [pages]);
 
-  // Ensure currentPage stays within valid bounds if pages length changes
   useEffect(() => {
     if (pages && pages.length > 0 && currentPage >= pages.length) {
       setCurrentPage(pages.length - 1);
     }
   }, [pages, currentPage]);
 
-  // Handle ESC key to exit fullscreen and Arrow keys for page navigation
   useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape' && isFullscreen) {
+    if (!isFullscreen || typeof document === 'undefined') return undefined;
+
+    const originalBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    closeFullscreenRef.current?.focus();
+
+    return () => {
+      document.body.style.overflow = originalBodyOverflow;
+    };
+  }, [isFullscreen]);
+
+  useEffect(() => {
+    if (previousFullscreenRef.current && !isFullscreen) {
+      fullscreenButtonRef.current?.focus();
+    }
+    previousFullscreenRef.current = isFullscreen;
+  }, [isFullscreen]);
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape' && isFullscreen) {
+        event.preventDefault();
         setIsFullscreen(false);
+        return;
       }
-      if (viewLayout === 'single') {
-        if (e.key === 'ArrowLeft') {
-          setCurrentPage((prev) => Math.max(prev - 1, 0));
-        } else if (e.key === 'ArrowRight') {
-          setCurrentPage((prev) => Math.min(prev + 1, pages.length - 1));
-        }
+      if (event.key === 'Tab' && isFullscreen) {
+        event.preventDefault();
+        closeFullscreenRef.current?.focus();
+        return;
+      }
+      if (event.target?.tagName === 'INPUT' && event.target.type === 'range') return;
+      if (!pages.length || (!isFullscreen && viewLayout !== 'single')) return;
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        setCurrentPage((page) => Math.max(page - 1, 0));
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        setCurrentPage((page) => Math.min(page + 1, pages.length - 1));
       }
     };
+
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isFullscreen, viewLayout, pages.length]);
+  }, [isFullscreen, pages.length, viewLayout]);
+
+  useEffect(() => {
+    [normalStageRef.current, fullscreenStageRef.current].forEach((stage) => {
+      if (stage) queueStageScroll(stage, 0, 0);
+    });
+  }, [currentPage]);
+
+  useEffect(
+    () => () => {
+      if (scrollFrameRef.current === null) return;
+      if (typeof window !== 'undefined' && window.cancelAnimationFrame) {
+        window.cancelAnimationFrame(scrollFrameRef.current);
+      } else {
+        clearTimeout(scrollFrameRef.current);
+      }
+    },
+    []
+  );
 
   if (!pages || pages.length === 0) {
     return (
@@ -54,270 +167,419 @@ export default function ImagePaperViewer({ pages = [], title = 'Question Paper',
     );
   }
 
-  const handlePrev = () => {
-    if (currentPage > 0) setCurrentPage(currentPage - 1);
+  const handlePrev = () => setCurrentPage((page) => Math.max(page - 1, 0));
+  const handleNext = () => setCurrentPage((page) => Math.min(page + 1, pages.length - 1));
+
+  const beginPinch = (stage, pointers) => {
+    const [first, second] = [...pointers.values()];
+    const rect = stage.getBoundingClientRect();
+    const centerX = (first.x + second.x) / 2;
+    const centerY = (first.y + second.y) / 2;
+    gestureRef.current = {
+      type: 'pinch',
+      startDistance: Math.max(1, getDistance(first, second)),
+      startZoom: zoomRef.current,
+      startCenterX: centerX - rect.left,
+      startCenterY: centerY - rect.top,
+      startScrollLeft: stage.scrollLeft,
+      startScrollTop: stage.scrollTop,
+    };
   };
 
-  const handleNext = () => {
-    if (currentPage < pages.length - 1) setCurrentPage(currentPage + 1);
+  const handlePointerDown = (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (event.cancelable) event.preventDefault();
+
+    const stage = event.currentTarget;
+    try {
+      stage.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Pointer capture is not available in every WebView/test environment.
+    }
+
+    const pointers = pointersRef.current;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+    if (pointers.size === 1) {
+      gestureRef.current = {
+        type: 'pan',
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        lastX: event.clientX,
+        lastY: event.clientY,
+        startedAtZoom: zoomRef.current,
+        allowPageSwipe: stage.dataset.fullscreen === 'true' && zoomRef.current <= 1.05,
+      };
+    } else if (pointers.size === 2) {
+      beginPinch(stage, pointers);
+    }
   };
 
-  const handleZoomIn = () => setZoom((z) => Math.min(z + 0.2, 2.5));
-  const handleZoomOut = () => setZoom((z) => Math.max(z - 0.2, 0.6));
-  const handleResetZoom = () => {
-    setZoom(1);
-    setFitWidth(true);
+  const handlePointerMove = (event) => {
+    const pointers = pointersRef.current;
+    if (!pointers.has(event.pointerId)) return;
+    if (event.cancelable) event.preventDefault();
+
+    const stage = event.currentTarget;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+    if (pointers.size >= 2) {
+      if (gestureRef.current?.type !== 'pinch') beginPinch(stage, pointers);
+      const gesture = gestureRef.current;
+      const [first, second] = [...pointers.values()];
+      const rect = stage.getBoundingClientRect();
+      const centerX = (first.x + second.x) / 2 - rect.left;
+      const centerY = (first.y + second.y) / 2 - rect.top;
+      const distanceRatio = getDistance(first, second) / gesture.startDistance;
+      const nextZoom = updateZoom(gesture.startZoom * distanceRatio);
+      const zoomRatio = nextZoom / gesture.startZoom;
+
+      queueStageScroll(
+        stage,
+        (gesture.startScrollLeft + gesture.startCenterX) * zoomRatio - centerX,
+        (gesture.startScrollTop + gesture.startCenterY) * zoomRatio - centerY
+      );
+      return;
+    }
+
+    const gesture = gestureRef.current;
+    if (gesture?.type === 'pan' && gesture.pointerId === event.pointerId) {
+      stage.scrollLeft -= event.clientX - gesture.lastX;
+      stage.scrollTop -= event.clientY - gesture.lastY;
+      gesture.lastX = event.clientX;
+      gesture.lastY = event.clientY;
+    }
   };
 
-  const toggleFullscreen = () => {
-    setIsFullscreen((prev) => !prev);
+  const finishPointer = (event, allowPageSwipe = false) => {
+    const stage = event.currentTarget;
+    const gesture = gestureRef.current;
+    const point = pointersRef.current.get(event.pointerId);
+    if (point) {
+      point.x = event.clientX;
+      point.y = event.clientY;
+    }
+
+    if (
+      allowPageSwipe &&
+      gesture?.type === 'pan' &&
+      gesture.pointerId === event.pointerId &&
+      gesture.allowPageSwipe &&
+      zoomRef.current <= 1.05
+    ) {
+      const deltaX = event.clientX - gesture.startX;
+      const deltaY = event.clientY - gesture.startY;
+      if (Math.abs(deltaX) > 64 && Math.abs(deltaX) > Math.abs(deltaY) * 1.25) {
+        if (deltaX < 0) handleNext();
+        else handlePrev();
+      }
+    }
+
+    pointersRef.current.delete(event.pointerId);
+    if (pointersRef.current.size === 1) {
+      const [[pointerId, remainingPoint]] = pointersRef.current.entries();
+      gestureRef.current = {
+        type: 'pan',
+        pointerId,
+        startX: remainingPoint.x,
+        startY: remainingPoint.y,
+        lastX: remainingPoint.x,
+        lastY: remainingPoint.y,
+        startedAtZoom: zoomRef.current,
+        allowPageSwipe: false,
+      };
+    } else if (pointersRef.current.size === 0) {
+      gestureRef.current = null;
+    }
+
+    try {
+      stage.releasePointerCapture?.(event.pointerId);
+    } catch {
+      // Ignore when the browser already released this pointer.
+    }
   };
 
-  const mainContainerClasses = `image-paper-container ${
-    isFullscreen
-      ? 'fixed inset-0 z-50 w-screen h-screen rounded-none border-0 bg-slate-950 flex flex-col overflow-hidden'
-      : 'relative'
-  }`;
+  const handlePointerUp = (event) => finishPointer(event, true);
+  const handlePointerCancel = (event) => finishPointer(event, false);
+
+  const renderImage = (pageIndex, fullscreen = false) => (
+    <div
+      className="image-paper-scaled-page"
+      style={{
+        width: `${zoom * 100}%`,
+        minWidth: `${zoom * 100}%`,
+        marginInline: zoom <= 1 ? 'auto' : 0,
+      }}
+    >
+      <img
+        key={`${pageIndex}-${fullscreen ? 'fullscreen' : 'inline'}`}
+        src={pages[pageIndex]}
+        alt={`Question paper page ${pageIndex + 1}`}
+        className="paper-page-image"
+        draggable="false"
+        onContextMenu={(event) => event.preventDefault()}
+        onDragStart={(event) => event.preventDefault()}
+      />
+    </div>
+  );
 
   return (
-    <div ref={containerRef} className={mainContainerClasses}>
-      {/* Header Toolbar */}
-      <div className="image-paper-toolbar flex flex-wrap items-center justify-between p-3 bg-slate-950 border-b border-slate-800 gap-3 font-mono">
-        <div className="toolbar-info flex items-center gap-2">
-          <span className="paper-tag bg-amber-600 text-slate-950 font-bold text-xs px-2 py-0.5 rounded">
-            {subjectCode || 'EXAM'}
-          </span>
-          <span className="paper-title text-slate-100 font-bold text-sm truncate max-w-[200px] sm:max-w-xs">
-            {title}
-          </span>
+    <div
+      className="image-paper-container relative"
+      aria-hidden={isFullscreen ? 'true' : undefined}
+      inert={isFullscreen}
+    >
+      {/* Compact controls remain available in the normal reader. */}
+      <div className="image-paper-toolbar">
+        <div className="toolbar-info">
+          <span className="paper-tag">{subjectCode || 'EXAM'}</span>
+          <span className="paper-title" title={title}>{title}</span>
         </div>
 
-        <div className="toolbar-controls flex flex-wrap items-center gap-2 text-xs">
-          {/* Page Layout Selector */}
-          <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-0.5 gap-0.5">
+        <div className="toolbar-controls">
+          <div className="image-paper-layout-controls" aria-label="Question paper layout">
             <button
               type="button"
-              className={`px-2 py-1 rounded transition-colors ${
-                viewLayout === 'single'
-                  ? 'bg-amber-600 text-slate-950 font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
+              className={`image-paper-control ${viewLayout === 'single' ? 'active' : ''}`}
               onClick={() => setViewLayout('single')}
-              title="Single Page View"
+              aria-pressed={viewLayout === 'single'}
+              title="Single page"
             >
-              📄 Single
+              Single
             </button>
             <button
               type="button"
-              className={`px-2 py-1 rounded transition-colors ${
-                viewLayout === 'continuous'
-                  ? 'bg-amber-600 text-slate-950 font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
+              className={`image-paper-control ${viewLayout === 'continuous' ? 'active' : ''}`}
               onClick={() => setViewLayout('continuous')}
-              title="Continuous Vertical Scroll View"
+              aria-pressed={viewLayout === 'continuous'}
+              title="Scroll all pages"
             >
-              📜 All Pages
+              All pages
             </button>
             <button
               type="button"
-              className={`px-2 py-1 rounded transition-colors ${
-                viewLayout === 'grid'
-                  ? 'bg-amber-600 text-slate-950 font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
+              className={`image-paper-control ${viewLayout === 'grid' ? 'active' : ''}`}
               onClick={() => setViewLayout('grid')}
-              title="Grid Overview Mode"
+              aria-pressed={viewLayout === 'grid'}
+              title="Page overview"
             >
-              ▦ Grid
+              Grid
             </button>
           </div>
 
-          <span className="toolbar-divider text-slate-700">|</span>
-
-          {/* Navigation Controls (Only for Single Page view mode) */}
           {viewLayout === 'single' && (
-            <div className="flex items-center gap-1.5">
+            <div className="image-paper-page-controls">
               <button
                 type="button"
-                className="toolbar-btn bg-slate-800 text-slate-200 border border-slate-700 px-2 py-1 rounded hover:bg-slate-700 disabled:opacity-40"
+                className="image-paper-control"
                 onClick={handlePrev}
                 disabled={currentPage === 0}
-                title="Previous Page"
+                aria-label="Previous page"
               >
-                ◀ Prev
+                ‹
               </button>
-              <span className="page-indicator text-slate-300 px-1">
-                Page <strong className="text-amber-400">{currentPage + 1}</strong> of{' '}
-                <strong>{pages.length}</strong>
+              <span className="page-indicator" aria-live="polite">
+                {currentPage + 1} / {pages.length}
               </span>
               <button
                 type="button"
-                className="toolbar-btn bg-slate-800 text-slate-200 border border-slate-700 px-2.5 py-1 rounded hover:bg-slate-700 disabled:opacity-40"
+                className="image-paper-control"
                 onClick={handleNext}
                 disabled={currentPage === pages.length - 1}
-                title="Next Page"
+                aria-label="Next page"
               >
-                Next ▶
+                ›
               </button>
-              <span className="toolbar-divider text-slate-700">|</span>
             </div>
           )}
 
-          {/* Zoom controls */}
           {viewLayout !== 'grid' && (
-            <div className="flex items-center gap-1">
+            <div className="image-paper-zoom-controls">
               <button
                 type="button"
-                className="toolbar-btn bg-slate-800 text-slate-200 border border-slate-700 px-2 py-1 rounded hover:bg-slate-700"
-                onClick={handleZoomOut}
-                title="Zoom Out"
+                className="image-paper-control zoom-button"
+                onClick={() => zoomAroundStageCenter(zoomRef.current - ZOOM_STEP)}
+                aria-label="Zoom out question paper"
+                title="Zoom out"
               >
-                🔍-
+                −
               </button>
-              <span className="zoom-indicator text-slate-400 min-w-[36px] text-center font-bold">
+              <input
+                className="image-paper-zoom-slider"
+                type="range"
+                min={MIN_ZOOM}
+                max={MAX_ZOOM}
+                step="0.1"
+                value={zoom}
+                onChange={(event) => zoomAroundStageCenter(Number(event.target.value))}
+                aria-label="Question paper zoom"
+                title="Drag to adjust zoom"
+              />
+              <span className="zoom-indicator" aria-live="polite">
                 {Math.round(zoom * 100)}%
               </span>
               <button
                 type="button"
-                className="toolbar-btn bg-slate-800 text-slate-200 border border-slate-700 px-2 py-1 rounded hover:bg-slate-700"
-                onClick={handleZoomIn}
-                title="Zoom In"
+                className="image-paper-control zoom-button"
+                onClick={() => zoomAroundStageCenter(zoomRef.current + ZOOM_STEP)}
+                aria-label="Zoom in question paper"
+                title="Zoom in"
               >
-                🔍+
+                +
               </button>
               <button
                 type="button"
-                className="toolbar-btn bg-slate-800 text-slate-200 border border-slate-700 px-2 py-1 rounded hover:bg-slate-700"
-                onClick={handleResetZoom}
-                title="Reset Zoom"
+                className="image-paper-control fit-button"
+                onClick={resetZoom}
+                aria-label="Fit question paper to width"
+                title="Fit to width"
               >
-                Reset
+                Fit
               </button>
             </div>
           )}
 
-          <span className="toolbar-divider text-slate-700">|</span>
-
-          {/* Full Screen Toggle Button */}
           <button
+            ref={fullscreenButtonRef}
             type="button"
-            onClick={toggleFullscreen}
-            className="flex items-center gap-1 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold px-3 py-1 rounded transition-colors shadow cursor-pointer"
-            title={isFullscreen ? 'Exit Full Screen' : 'View Full Screen'}
+            onClick={() => setIsFullscreen(true)}
+            className="image-paper-fullscreen-button"
+            aria-label="Open question paper full screen"
+            title="Open full screen"
           >
-            {isFullscreen ? '✕ Exit Full Screen' : '⛶ Full Screen'}
+            ⛶ <span>Full screen</span>
           </button>
         </div>
       </div>
 
-      {/* Main Content Area */}
       <div
-        className={`image-paper-body p-4 bg-slate-950 flex-1 overflow-auto ${
-          isFullscreen ? 'h-full max-h-none' : 'min-h-[480px] max-h-[75vh]'
-        }`}
+        ref={normalStageRef}
+        className={`image-paper-body ${viewLayout === 'grid' ? 'is-grid' : ''}`}
+        data-fullscreen="false"
+        onPointerDown={viewLayout === 'grid' ? undefined : handlePointerDown}
+        onPointerMove={viewLayout === 'grid' ? undefined : handlePointerMove}
+        onPointerUp={viewLayout === 'grid' ? undefined : handlePointerUp}
+        onPointerCancel={viewLayout === 'grid' ? undefined : handlePointerCancel}
+        onLostPointerCapture={viewLayout === 'grid' ? undefined : handlePointerCancel}
+        style={{
+          touchAction: viewLayout === 'grid' ? 'auto' : 'none',
+          justifyContent: zoom <= 1 ? 'center' : 'flex-start',
+        }}
       >
-        {/* Single Page Layout */}
-        {viewLayout === 'single' && (
-          <div className="image-display-wrapper flex justify-center items-start w-full">
-            <img
-              key={currentPage}
-              src={pages[currentPage]}
-              alt={`Page ${currentPage + 1}`}
-              className="paper-page-image shadow-2xl rounded border border-slate-800 transition-transform duration-200 bg-white"
-              style={{
-                transform: `scale(${zoom})`,
-                transformOrigin: 'top center',
-                maxWidth: fitWidth ? '100%' : 'none',
-              }}
-              onContextMenu={(e) => e.preventDefault()}
-              onDragStart={(e) => e.preventDefault()}
-            />
-          </div>
-        )}
+        {viewLayout === 'single' && renderImage(currentPage)}
 
-        {/* Continuous All Pages Layout */}
         {viewLayout === 'continuous' && (
-          <div className="w-full space-y-6 flex flex-col items-center">
-            {pages.map((pageSrc, idx) => (
-              <div key={idx} className="flex flex-col items-center space-y-2 max-w-4xl w-full">
-                <div className="text-xs font-mono font-bold text-amber-400 bg-amber-950/80 border border-amber-800 px-3 py-1 rounded">
-                  PAGE {idx + 1} OF {pages.length}
-                </div>
+          <div className="image-paper-continuous-pages">
+            {pages.map((pageSrc, index) => (
+              <div
+                key={`${index}-${pageSrc.slice(0, 24)}`}
+                className="image-paper-continuous-page"
+                style={{
+                  width: `${zoom * 100}%`,
+                  minWidth: `${zoom * 100}%`,
+                  maxWidth: zoom <= 1 ? '64rem' : 'none',
+                  marginInline: zoom <= 1 ? 'auto' : 0,
+                }}
+              >
+                <div className="image-paper-page-label">PAGE {index + 1} OF {pages.length}</div>
                 <img
                   src={pageSrc}
-                  alt={`Page ${idx + 1}`}
-                  className="paper-page-image shadow-2xl rounded border border-slate-800 bg-white w-full"
-                  style={{
-                    transform: `scale(${zoom})`,
-                    transformOrigin: 'top center',
-                  }}
-                  onContextMenu={(e) => e.preventDefault()}
-                  onDragStart={(e) => e.preventDefault()}
+                  alt={`Question paper page ${index + 1}`}
+                  className="paper-page-image"
+                  draggable="false"
+                  onContextMenu={(event) => event.preventDefault()}
+                  onDragStart={(event) => event.preventDefault()}
                 />
               </div>
             ))}
           </div>
         )}
 
-        {/* Grid View Layout */}
         {viewLayout === 'grid' && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 w-full max-w-6xl mx-auto">
-            {pages.map((pageSrc, idx) => (
-              <div
-                key={idx}
+          <div className="image-paper-grid">
+            {pages.map((pageSrc, index) => (
+              <button
+                key={`${index}-${pageSrc.slice(0, 24)}`}
+                type="button"
                 onClick={() => {
-                  setCurrentPage(idx);
+                  setCurrentPage(index);
                   setViewLayout('single');
+                  resetZoom();
                 }}
-                className={`group relative bg-slate-900 border-2 rounded-xl p-2 cursor-pointer transition-all hover:scale-[1.02] ${
-                  idx === currentPage ? 'border-amber-500 shadow-lg shadow-amber-500/20' : 'border-slate-800 hover:border-slate-600'
-                }`}
+                className={`image-paper-grid-card ${index === currentPage ? 'active' : ''}`}
+                aria-label={`Open page ${index + 1}`}
               >
-                <div className="aspect-[3/4] overflow-hidden rounded bg-slate-950 flex items-center justify-center">
-                  <img
-                    src={pageSrc}
-                    alt={`Grid Page ${idx + 1}`}
-                    className="w-full h-full object-contain"
-                    onContextMenu={(e) => e.preventDefault()}
-                    onDragStart={(e) => e.preventDefault()}
-                  />
-                </div>
-                <div className="mt-2 flex items-center justify-between px-1 text-xs font-mono">
-                  <span className="font-bold text-amber-400">PAGE {idx + 1}</span>
-                  <span className="text-slate-400 group-hover:text-slate-200">Click to View ↗</span>
-                </div>
-              </div>
+                <span className="image-paper-grid-image-frame">
+                  <img src={pageSrc} alt="" draggable="false" />
+                </span>
+                <span className="image-paper-grid-label">PAGE {index + 1}</span>
+              </button>
             ))}
           </div>
         )}
       </div>
 
-      {/* Page Thumbnails Bar (Only for Single Page view mode) */}
       {viewLayout === 'single' && pages.length > 1 && (
-        <div className="image-paper-thumbnails flex items-center gap-3 p-3 bg-slate-950 border-t border-slate-800 overflow-x-auto">
-          {pages.map((pageSrc, idx) => (
+        <div className="image-paper-thumbnails" aria-label="Question paper pages">
+          {pages.map((pageSrc, index) => (
             <button
-              key={idx}
-              className={`thumbnail-card relative w-14 h-18 rounded border-2 overflow-hidden shrink-0 transition-all ${
-                idx === currentPage ? 'border-amber-500 scale-105 shadow-md shadow-amber-500/20' : 'border-slate-800 opacity-70 hover:opacity-100'
-              }`}
-              onClick={() => setCurrentPage(idx)}
-              title={`Jump to Page ${idx + 1}`}
+              key={`${index}-${pageSrc.slice(0, 24)}`}
+              type="button"
+              className={`thumbnail-card ${index === currentPage ? 'active' : ''}`}
+              onClick={() => setCurrentPage(index)}
+              aria-label={`Jump to page ${index + 1}`}
+              aria-current={index === currentPage ? 'page' : undefined}
             >
-              <img
-                src={pageSrc}
-                alt={`Thumbnail ${idx + 1}`}
-                className="w-full h-full object-cover"
-                onContextMenu={(e) => e.preventDefault()}
-                onDragStart={(e) => e.preventDefault()}
-              />
-              <span className="thumb-label absolute bottom-1 right-1 bg-slate-950/80 text-amber-400 text-[10px] font-bold px-1 rounded font-mono">
-                {idx + 1}
-              </span>
+              <img src={pageSrc} alt="" draggable="false" />
+              <span className="thumb-label">{index + 1}</span>
             </button>
           ))}
         </div>
+      )}
+
+      {isFullscreen && typeof document !== 'undefined' && createPortal(
+        <div
+          className="image-paper-fullscreen"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Full-screen question paper"
+          onContextMenu={(event) => event.preventDefault()}
+          onCopy={(event) => event.preventDefault()}
+          onCut={(event) => event.preventDefault()}
+          onPaste={(event) => event.preventDefault()}
+          style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+        >
+          <button
+            ref={closeFullscreenRef}
+            type="button"
+            className="image-paper-fullscreen-close"
+            onClick={() => setIsFullscreen(false)}
+            aria-label="Close full-screen question paper"
+            title="Close"
+          >
+            ×
+          </button>
+          <div
+            ref={fullscreenStageRef}
+            className="image-paper-fullscreen-stage"
+            data-fullscreen="true"
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerCancel}
+            onLostPointerCapture={handlePointerCancel}
+            style={{ touchAction: 'none', justifyContent: zoom <= 1 ? 'center' : 'flex-start' }}
+          >
+            {renderImage(currentPage, true)}
+          </div>
+          {pages.length > 1 && (
+            <span className="image-paper-sr-only" aria-live="polite">
+              Page {currentPage + 1} of {pages.length}. Swipe left or right to change pages.
+            </span>
+          )}
+        </div>,
+        document.body
       )}
     </div>
   );

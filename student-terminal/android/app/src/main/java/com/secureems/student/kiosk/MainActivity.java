@@ -4,8 +4,10 @@ import android.app.ActivityManager;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
+import android.graphics.Rect;
 import android.hardware.display.DisplayManager;
 import android.net.wifi.WifiManager;
 import android.os.Build;
@@ -27,6 +29,9 @@ import androidx.activity.OnBackPressedCallback;
 import com.getcapacitor.BridgeActivity;
 
 import org.json.JSONObject;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * MainActivity for the Secure EMS Android Student Kiosk Terminal.
@@ -157,6 +162,9 @@ public class MainActivity extends BridgeActivity {
                 }
             }
         });
+
+        // Begin LockTask / Screen Pinning immediately, before the student can log in.
+        activateExamKioskLockdown("unspecified");
     }
 
     private void hardenWebView() {
@@ -339,6 +347,7 @@ public class MainActivity extends BridgeActivity {
 
     public void enforceImmersiveFullscreen() {
         try {
+            View decorView = getWindow().getDecorView();
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 WindowInsetsController controller = getWindow().getInsetsController();
                 if (controller != null) {
@@ -348,7 +357,6 @@ public class MainActivity extends BridgeActivity {
                     );
                 }
             } else {
-                View decorView = getWindow().getDecorView();
                 decorView.setSystemUiVisibility(
                     View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                     | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
@@ -357,6 +365,27 @@ public class MainActivity extends BridgeActivity {
                     | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                     | View.SYSTEM_UI_FLAG_FULLSCREEN
                 );
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                Runnable setGestureExclusionRects = () -> {
+                    int w = decorView.getWidth();
+                    int h = decorView.getHeight();
+                    if (w <= 0 || h <= 0) return;
+
+                    List<Rect> exclusionRects = new ArrayList<>(3);
+                    exclusionRects.add(new Rect(0, Math.max(0, h - 200), w, h));
+                    exclusionRects.add(new Rect(0, 0, Math.min(120, w), h));
+                    exclusionRects.add(new Rect(Math.max(0, w - 120), 0, w, h));
+                    decorView.setSystemGestureExclusionRects(exclusionRects);
+                };
+
+                // The decor view may not have been laid out yet during onCreate().
+                if (decorView.getWidth() > 0 && decorView.getHeight() > 0) {
+                    setGestureExclusionRects.run();
+                } else {
+                    decorView.post(setGestureExclusionRects);
+                }
             }
         } catch (Exception e) {
             Log.w(TAG, "Immersive fullscreen error: " + e.getMessage());
@@ -406,6 +435,7 @@ public class MainActivity extends BridgeActivity {
                 "APP_SWITCH_ATTEMPT",
                 "Student attempted to leave kiosk application via Home or Recent Apps gesture."
             );
+            snapKioskTaskToFront();
         }
     }
 
@@ -417,6 +447,45 @@ public class MainActivity extends BridgeActivity {
                 "BACKGROUND_PAUSE_DETECTED",
                 "Android Kiosk Activity entered paused/background state during active examination."
             );
+            snapKioskTaskToFront();
+        }
+    }
+
+    @Override
+    public void onStop() {
+        super.onStop();
+        if (examKioskActive) {
+            snapKioskTaskToFront();
+        }
+    }
+
+    private void snapKioskTaskToFront() {
+        if (!examKioskActive) return;
+
+        try {
+            ActivityManager activityManager =
+                (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            if (activityManager != null) {
+                activityManager.moveTaskToFront(
+                    getTaskId(),
+                    ActivityManager.MOVE_TASK_WITH_HOME
+                );
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Could not move kiosk task to front: " + e.getMessage());
+        }
+
+        try {
+            Intent kioskIntent = new Intent(this, MainActivity.class);
+            kioskIntent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    | Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    | Intent.FLAG_ACTIVITY_CLEAR_TOP
+            );
+            startActivity(kioskIntent);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not relaunch kiosk task: " + e.getMessage());
         }
     }
 

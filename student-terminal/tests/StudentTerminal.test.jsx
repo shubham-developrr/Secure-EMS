@@ -101,7 +101,36 @@ describe('StudentTerminal Android & Kiosk Anti-Cheat Suite', () => {
     expect(screen.getByText(/🛡️ FLAG_SECURE/i)).toBeInTheDocument();
     expect(screen.getByText(/SPLIT-SCREEN: BLOCKED/i)).toBeInTheDocument();
     expect(screen.getByText(/6\/6 READY/i)).toBeInTheDocument();
+    expect(window.SecureKioskBridge.enableKioskMode).toHaveBeenCalledWith('unspecified');
+    await waitFor(() => {
+      expect(screen.getByText(/🔋 94%/)).toBeInTheDocument();
+    });
     expect(screen.queryByText(/Configure Server/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the Android pre-exam pin warning and retries LockTask from its button', async () => {
+    window.SecureKioskBridge.getKioskStatus.mockReturnValue(
+      JSON.stringify({
+        platform: 'android',
+        isLockTaskActive: false,
+        lockTaskMode: 'UNPINNED',
+        displayCount: 1,
+      })
+    );
+
+    render(<StudentTerminal />);
+
+    const pinButton = await screen.findByRole('button', {
+      name: /PIN ANDROID SCREEN NOW \(LOCK HOME SWIPE\)/i,
+    });
+    const callsBeforePin = window.SecureKioskBridge.enableKioskMode.mock.calls.length;
+
+    fireEvent.click(pinButton);
+
+    await waitFor(() => {
+      expect(window.SecureKioskBridge.enableKioskMode).toHaveBeenCalledTimes(callsBeforePin + 1);
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent(/Got it.*Pin/i);
   });
 
   it('activates native Android LockTask kiosk mode on login and displays decrypted paper with forensic watermark', async () => {
@@ -180,6 +209,41 @@ describe('StudentTerminal Android & Kiosk Anti-Cheat Suite', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/EXTERNAL DISPLAY \/ SCREEN CAST DETECTED/i)).toBeInTheDocument();
+    });
+  });
+
+  it('automatically suspends an unlocked paper and keeps the pin modal open when still unpinned', async () => {
+    const terminalRef = React.createRef();
+    render(<StudentTerminal ref={terminalRef} />);
+
+    fireEvent.change(screen.getByPlaceholderText('CS-602'), { target: { value: 'CS-602' } });
+    fireEvent.click(screen.getByRole('button', { name: /START SECURE KIOSK READER/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/SECURE STUDENT KIOSK READER — ACTIVE/i)).toBeInTheDocument();
+    });
+
+    window.SecureKioskBridge.getKioskStatus.mockReturnValue(
+      JSON.stringify({
+        platform: 'android',
+        kioskExamActive: true,
+        isLockTaskActive: false,
+        lockTaskMode: 'UNPINNED',
+        displayCount: 1,
+      })
+    );
+
+    await act(async () => {
+      await terminalRef.current.refreshKioskSecurityStatus();
+    });
+
+    expect(screen.getByText(/ANDROID SCREEN PINNING BREACHED/i)).toBeInTheDocument();
+    expect(screen.getByText(/If Android shows a confirmation prompt/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /RE-PIN SCREEN & RESUME SECURE SESSION/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/ANDROID SCREEN PINNING BREACHED/i)).toBeInTheDocument();
     });
   });
 
