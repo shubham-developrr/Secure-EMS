@@ -98,11 +98,11 @@ describe('StudentTerminal Android & Kiosk Anti-Cheat Suite', () => {
 
     // Open server configuration drawer
     fireEvent.click(screen.getByText(/Configure Server/i));
-    const urlInput = screen.getByPlaceholderText('http://192.168.1.100:8000');
-    fireEvent.change(urlInput, { target: { value: 'http://192.168.1.55:8000' } });
+    const urlInput = screen.getByPlaceholderText('https://secure-ems-backend.onrender.com');
+    fireEvent.change(urlInput, { target: { value: 'https://secure-ems-backend.onrender.com' } });
     fireEvent.click(screen.getByText('Save'));
 
-    expect(localStorage.getItem('KIOSK_API_BASE')).toBe('http://192.168.1.55:8000');
+    expect(localStorage.getItem('KIOSK_API_BASE')).toBe('https://secure-ems-backend.onrender.com');
   });
 
   it('activates native Android LockTask kiosk mode on login and displays decrypted paper with forensic watermark', async () => {

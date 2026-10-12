@@ -12,6 +12,9 @@ import {
   subscribeNativeViolations,
 } from './nativeKioskBridge.js';
 
+const RENDER_PRIMARY_URL = 'https://secure-ems-backend.onrender.com';
+const RENDER_FALLBACK_URL = 'https://secure-ems.onrender.com';
+
 const isRemoteBrowserHost =
   typeof window !== 'undefined' &&
   window.location &&
@@ -19,7 +22,13 @@ const isRemoteBrowserHost =
   window.location.hostname !== 'localhost' &&
   window.location.hostname !== '127.0.0.1';
 
-const DEFAULT_API_BASE = import.meta.env.PROD || isRemoteBrowserHost ? '' : 'http://localhost:8000';
+const getPlatformDefaultApiBase = () => {
+  const platform = getKioskPlatform();
+  if (platform === 'android' || platform === 'electron') {
+    return RENDER_PRIMARY_URL;
+  }
+  return import.meta.env.PROD || isRemoteBrowserHost ? '' : 'http://localhost:8000';
+};
 
 const getInitialApiBase = () => {
   try {
@@ -32,7 +41,7 @@ const getInitialApiBase = () => {
   } catch {
     // Ignore
   }
-  return DEFAULT_API_BASE;
+  return getPlatformDefaultApiBase();
 };
 
 const formatSecondsAsClock = (totalSeconds) => {
@@ -244,7 +253,37 @@ export default class StudentTerminal extends React.Component {
 
   getActiveApiBase = () => {
     const custom = (this.state.apiBaseUrl || '').trim().replace(/\/+$/, '');
-    return custom || DEFAULT_API_BASE;
+    return custom || getPlatformDefaultApiBase();
+  };
+
+  fetchFromKioskApi = async (endpointPath, options = {}) => {
+    const base = this.getActiveApiBase();
+    try {
+      const res = await fetch(`${base}${endpointPath}`, options);
+      if (
+        !res.ok &&
+        base === RENDER_PRIMARY_URL &&
+        (res.status === 404 || res.status === 502 || res.status === 503)
+      ) {
+        const altRes = await fetch(`${RENDER_FALLBACK_URL}${endpointPath}`, options);
+        if (altRes.ok) {
+          this.setState({ apiBaseUrl: RENDER_FALLBACK_URL });
+          return altRes;
+        }
+      }
+      return res;
+    } catch (primaryErr) {
+      if (base === RENDER_PRIMARY_URL) {
+        try {
+          const altRes = await fetch(`${RENDER_FALLBACK_URL}${endpointPath}`, options);
+          this.setState({ apiBaseUrl: RENDER_FALLBACK_URL });
+          return altRes;
+        } catch {
+          // Rethrow original error
+        }
+      }
+      throw primaryErr;
+    }
   };
 
   refreshKioskSecurityStatus = async () => {
@@ -399,8 +438,7 @@ export default class StudentTerminal extends React.Component {
     }
 
     try {
-      const base = this.getActiveApiBase();
-      const res = await fetch(`${base}/api/student/verification/${encodeURIComponent(cleanRoll)}`);
+      const res = await this.fetchFromKioskApi(`/api/student/verification/${encodeURIComponent(cleanRoll)}`);
       if (res.ok) {
         const data = await res.json();
         if (data.verified && data.captured_image_base64) {
@@ -480,9 +518,8 @@ export default class StudentTerminal extends React.Component {
       ? 'FOCUS_LOSS'
       : 'ACTIVE';
 
-    const base = this.getActiveApiBase();
     try {
-      await fetch(`${base}/api/student/heartbeat`, {
+      await this.fetchFromKioskApi('/api/student/heartbeat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -507,11 +544,10 @@ export default class StudentTerminal extends React.Component {
     const queue = this.state.queuedOfflineAlerts;
     if (!queue || queue.length === 0) return;
 
-    const base = this.getActiveApiBase();
     const remaining = [];
     for (const item of queue) {
       try {
-        const res = await fetch(`${base}/api/student/security-alert`, {
+        const res = await this.fetchFromKioskApi('/api/student/security-alert', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(item),
@@ -606,9 +642,8 @@ export default class StudentTerminal extends React.Component {
       details,
     };
 
-    const base = this.getActiveApiBase();
     try {
-      const res = await fetch(`${base}/api/student/security-alert`, {
+      const res = await this.fetchFromKioskApi('/api/student/security-alert', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -645,15 +680,15 @@ export default class StudentTerminal extends React.Component {
     const base = this.getActiveApiBase();
     this.setState({ serverTestStatus: `Testing ${base || 'same-origin'}...` });
     try {
-      const res = await fetch(`${base}/api/scheduled-exams`);
+      const res = await this.fetchFromKioskApi('/api/scheduled-exams');
       if (res.ok) {
-        this.setState({ serverTestStatus: `✓ Connected to Exam Server (${base || 'same-origin'})` });
+        this.setState({ serverTestStatus: `✓ Connected to Exam Server (${this.getActiveApiBase() || 'same-origin'})` });
       } else {
         this.setState({ serverTestStatus: `⚠️ Server responded with HTTP ${res.status}` });
       }
     } catch {
       this.setState({
-        serverTestStatus: `✕ Unreachable (${base || 'localhost'}). Check Exam Hall LAN IP / Wi-Fi.`,
+        serverTestStatus: `✕ Unreachable (${base || 'localhost'}). Check Render Server / Exam Hall Wi-Fi.`,
       });
     }
   };
@@ -684,10 +719,8 @@ export default class StudentTerminal extends React.Component {
 
     this.setState({ studentLoading: true, studentError: '' });
 
-    const base = this.getActiveApiBase();
-
     try {
-      const response = await fetch(`${base}/api/student/paper`, {
+      const response = await this.fetchFromKioskApi('/api/student/paper', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1209,14 +1242,52 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                   {showServerSettings && (
                     <div className="mt-3 pt-3 border-t border-slate-800 space-y-2.5">
                       <label className="block text-slate-400 text-[11px]">
-                        EXAM HALL FASTAPI SERVER URL (e.g. http://192.168.1.100:8000 or http://10.0.2.2:8000)
+                        EXAM HALL FASTAPI SERVER URL (Render Cloud or Exam Hall LAN IP)
                       </label>
+                      <div className="flex flex-wrap gap-1.5 pb-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            this.setState({
+                              apiBaseUrl: RENDER_PRIMARY_URL,
+                              serverTestStatus: `Selected Render Cloud: ${RENDER_PRIMARY_URL}`,
+                            })
+                          }
+                          className="bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-800/70 px-2 py-1 rounded text-[10px]"
+                        >
+                          ☁️ Render (secure-ems-backend.onrender.com)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            this.setState({
+                              apiBaseUrl: RENDER_FALLBACK_URL,
+                              serverTestStatus: `Selected Render Alt: ${RENDER_FALLBACK_URL}`,
+                            })
+                          }
+                          className="bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-800/70 px-2 py-1 rounded text-[10px]"
+                        >
+                          ☁️ Render Alt (secure-ems.onrender.com)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            this.setState({
+                              apiBaseUrl: '',
+                              serverTestStatus: 'Reset to platform default server.',
+                            })
+                          }
+                          className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-2 py-1 rounded text-[10px]"
+                        >
+                          🔄 Default / Auto
+                        </button>
+                      </div>
                       <div className="flex flex-col sm:flex-row gap-2">
                         <input
                           type="url"
                           value={apiBaseUrl}
                           onChange={(e) => this.setState({ apiBaseUrl: e.target.value })}
-                          placeholder="http://192.168.1.100:8000"
+                          placeholder="https://secure-ems-backend.onrender.com"
                           className="flex-1 bg-slate-950 border border-slate-700 rounded px-3 py-1.5 text-slate-100 focus:outline-none focus:border-emerald-500"
                         />
                         <button
