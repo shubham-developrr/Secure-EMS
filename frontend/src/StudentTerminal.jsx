@@ -15,35 +15,6 @@ import {
 const RENDER_PRIMARY_URL = 'https://secure-ems-backend.onrender.com';
 const RENDER_FALLBACK_URL = 'https://secure-ems.onrender.com';
 
-const isRemoteBrowserHost =
-  typeof window !== 'undefined' &&
-  window.location &&
-  window.location.hostname &&
-  window.location.hostname !== 'localhost' &&
-  window.location.hostname !== '127.0.0.1';
-
-const getPlatformDefaultApiBase = () => {
-  const platform = getKioskPlatform();
-  if (platform === 'android' || platform === 'electron') {
-    return RENDER_PRIMARY_URL;
-  }
-  return import.meta.env.PROD || isRemoteBrowserHost ? '' : 'http://localhost:8000';
-};
-
-const getInitialApiBase = () => {
-  try {
-    if (typeof localStorage !== 'undefined') {
-      const saved = localStorage.getItem('KIOSK_API_BASE');
-      if (saved && saved.trim()) {
-        return saved.trim().replace(/\/+$/, '');
-      }
-    }
-  } catch {
-    // Ignore
-  }
-  return getPlatformDefaultApiBase();
-};
-
 const formatSecondsAsClock = (totalSeconds) => {
   const safe = Math.max(0, Number(totalSeconds) || 0);
   const hrs = String(Math.floor(safe / 3600)).padStart(2, '0');
@@ -145,9 +116,7 @@ export default class StudentTerminal extends React.Component {
       secretExitModal: false,
       secretExitPin: '',
       // Android & Mobile/Tablet Kiosk state
-      apiBaseUrl: getInitialApiBase(),
-      showServerSettings: false,
-      serverTestStatus: '',
+      apiBaseUrl: RENDER_PRIMARY_URL,
       orientationMode: 'unspecified',
       kioskPlatform: detectedPlatform,
       kioskStatus: {
@@ -252,8 +221,7 @@ export default class StudentTerminal extends React.Component {
   }
 
   getActiveApiBase = () => {
-    const custom = (this.state.apiBaseUrl || '').trim().replace(/\/+$/, '');
-    return custom || getPlatformDefaultApiBase();
+    return this.state.apiBaseUrl || RENDER_PRIMARY_URL;
   };
 
   fetchFromKioskApi = async (endpointPath, options = {}) => {
@@ -279,10 +247,14 @@ export default class StudentTerminal extends React.Component {
           this.setState({ apiBaseUrl: RENDER_FALLBACK_URL });
           return altRes;
         } catch {
-          // Rethrow original error
+          // Try relative proxy fallback for local preview environments
         }
       }
-      throw primaryErr;
+      try {
+        return await fetch(endpointPath, options);
+      } catch {
+        throw primaryErr;
+      }
     }
   };
 
@@ -659,40 +631,6 @@ export default class StudentTerminal extends React.Component {
     }
   };
 
-  handleSaveServerSettings = () => {
-    const clean = (this.state.apiBaseUrl || '').trim().replace(/\/+$/, '');
-    try {
-      if (clean) {
-        localStorage.setItem('KIOSK_API_BASE', clean);
-      } else {
-        localStorage.removeItem('KIOSK_API_BASE');
-      }
-    } catch {
-      // Ignore
-    }
-    this.setState({
-      apiBaseUrl: clean,
-      serverTestStatus: 'Saved kiosk server configuration.',
-    });
-  };
-
-  handleTestServerConnection = async () => {
-    const base = this.getActiveApiBase();
-    this.setState({ serverTestStatus: `Testing ${base || 'same-origin'}...` });
-    try {
-      const res = await this.fetchFromKioskApi('/api/scheduled-exams');
-      if (res.ok) {
-        this.setState({ serverTestStatus: `✓ Connected to Exam Server (${this.getActiveApiBase() || 'same-origin'})` });
-      } else {
-        this.setState({ serverTestStatus: `⚠️ Server responded with HTTP ${res.status}` });
-      }
-    } catch {
-      this.setState({
-        serverTestStatus: `✕ Unreachable (${base || 'localhost'}). Check Render Server / Exam Hall Wi-Fi.`,
-      });
-    }
-  };
-
   handleOrientationChange = async (mode) => {
     this.setState({ orientationMode: mode });
     await setKioskOrientation(mode);
@@ -992,9 +930,6 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
       displayBreachModal,
       kioskSubmitted,
       adminUnlockPin,
-      apiBaseUrl,
-      showServerSettings,
-      serverTestStatus,
       orientationMode,
       kioskStatus,
       examRemainingSeconds,
@@ -1030,7 +965,7 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
             <div className="flex items-center gap-2 flex-wrap">
               {this.state.kioskPlatform === 'web' && !studentUnlocked && (
                 <a
-                  href={`${this.getActiveApiBase()}/api/student/download-apk`}
+                  href="/api/student/download-apk"
                   download="Secure-EMS-Student-Kiosk.apk"
                   className="bg-emerald-800/80 hover:bg-emerald-700 text-emerald-100 border border-emerald-500/70 px-2.5 py-1 rounded text-[11px] font-mono font-bold transition-colors flex items-center gap-1 shadow"
                   title="Download compiled Android Kiosk APK (Secure-EMS-Student-Kiosk.apk)"
@@ -1220,96 +1155,6 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                     <div>✓ Tapjacking Overlay Filter</div>
                     <div>✓ System Clipboard Auto-Wipe</div>
                   </div>
-                </div>
-
-                {/* Collapsible Exam Hall Server & Kiosk Configuration for Android Tablets/Phones */}
-                <div className="bg-slate-900/90 border border-slate-800 rounded p-3 text-xs font-mono">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-300 font-bold">
-                      📡 EXAM SERVER: {this.getActiveApiBase() || 'Same-Origin Cloud'}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        this.setState((prev) => ({ showServerSettings: !prev.showServerSettings }))
-                      }
-                      className="text-emerald-400 hover:text-emerald-300 font-bold underline"
-                    >
-                      {showServerSettings ? 'Hide Setup' : '⚙️ Configure Server'}
-                    </button>
-                  </div>
-
-                  {showServerSettings && (
-                    <div className="mt-3 pt-3 border-t border-slate-800 space-y-2.5">
-                      <label className="block text-slate-400 text-[11px]">
-                        EXAM HALL FASTAPI SERVER URL (Render Cloud or Exam Hall LAN IP)
-                      </label>
-                      <div className="flex flex-wrap gap-1.5 pb-1">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            this.setState({
-                              apiBaseUrl: RENDER_PRIMARY_URL,
-                              serverTestStatus: `Selected Render Cloud: ${RENDER_PRIMARY_URL}`,
-                            })
-                          }
-                          className="bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-800/70 px-2 py-1 rounded text-[10px]"
-                        >
-                          ☁️ Render (secure-ems-backend.onrender.com)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            this.setState({
-                              apiBaseUrl: RENDER_FALLBACK_URL,
-                              serverTestStatus: `Selected Render Alt: ${RENDER_FALLBACK_URL}`,
-                            })
-                          }
-                          className="bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-800/70 px-2 py-1 rounded text-[10px]"
-                        >
-                          ☁️ Render Alt (secure-ems.onrender.com)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            this.setState({
-                              apiBaseUrl: '',
-                              serverTestStatus: 'Reset to platform default server.',
-                            })
-                          }
-                          className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-2 py-1 rounded text-[10px]"
-                        >
-                          🔄 Default / Auto
-                        </button>
-                      </div>
-                      <div className="flex flex-col sm:flex-row gap-2">
-                        <input
-                          type="url"
-                          value={apiBaseUrl}
-                          onChange={(e) => this.setState({ apiBaseUrl: e.target.value })}
-                          placeholder="https://secure-ems-backend.onrender.com"
-                          className="flex-1 bg-slate-950 border border-slate-700 rounded px-3 py-1.5 text-slate-100 focus:outline-none focus:border-emerald-500"
-                        />
-                        <button
-                          type="button"
-                          onClick={this.handleSaveServerSettings}
-                          className="bg-emerald-700 hover:bg-emerald-600 text-white font-bold px-3 py-1.5 rounded"
-                        >
-                          Save
-                        </button>
-                        <button
-                          type="button"
-                          onClick={this.handleTestServerConnection}
-                          className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold px-3 py-1.5 rounded"
-                        >
-                          Test Ping
-                        </button>
-                      </div>
-                      {serverTestStatus && (
-                        <p className="text-[11px] text-amber-300">{serverTestStatus}</p>
-                      )}
-                    </div>
-                  )}
                 </div>
 
                 {studentError && (

@@ -88,21 +88,14 @@ describe('StudentTerminal Android & Kiosk Anti-Cheat Suite', () => {
     delete window.SecureKioskBridge;
   });
 
-  it('renders Android Kiosk security telemetry badges and configurable server setup', async () => {
+  it('renders Android Kiosk security telemetry badges and hardware checklist without server config UI', async () => {
     render(<StudentTerminal />);
 
     expect(screen.getByText(/STUDENT SECURE KIOSK TERMINAL/i)).toBeInTheDocument();
     expect(screen.getByText(/🛡️ FLAG_SECURE/i)).toBeInTheDocument();
     expect(screen.getByText(/SPLIT-SCREEN: BLOCKED/i)).toBeInTheDocument();
     expect(screen.getByText(/6\/6 READY/i)).toBeInTheDocument();
-
-    // Open server configuration drawer
-    fireEvent.click(screen.getByText(/Configure Server/i));
-    const urlInput = screen.getByPlaceholderText('https://secure-ems-backend.onrender.com');
-    fireEvent.change(urlInput, { target: { value: 'https://secure-ems-backend.onrender.com' } });
-    fireEvent.click(screen.getByText('Save'));
-
-    expect(localStorage.getItem('KIOSK_API_BASE')).toBe('https://secure-ems-backend.onrender.com');
+    expect(screen.queryByText(/Configure Server/i)).not.toBeInTheDocument();
   });
 
   it('activates native Android LockTask kiosk mode on login and displays decrypted paper with forensic watermark', async () => {
