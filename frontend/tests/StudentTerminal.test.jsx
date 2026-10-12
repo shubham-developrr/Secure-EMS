@@ -51,6 +51,7 @@ describe('StudentTerminal Android & Kiosk Anti-Cheat Suite', () => {
           ok: true,
           json: async () => ({
             verified: true,
+            roll_number: '2026-CS-101',
             captured_image_base64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
           }),
         };
@@ -60,8 +61,13 @@ describe('StudentTerminal Android & Kiosk Anti-Cheat Suite', () => {
           ok: true,
           json: async () => ({
             status: 'success',
-            content: 'SECTION A: Q1. Explain Android LockTask Mode and FLAG_SECURE.',
-            captured_image_base64: null,
+            roll_number: '2026-CS-101',
+            seat_id: 'DESK-42',
+            subject_code: 'CS-602',
+            center_code: 'CTR-101',
+            captured_image_base64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+            verification_status: 'VERIFIED',
+            content: 'SECTION A — EXAMINATION QUESTIONS & INSTRUCTIONS\nQ1. Explain Android LockTask Mode and FLAG_SECURE.',
           }),
         };
       }
@@ -113,6 +119,7 @@ describe('StudentTerminal Android & Kiosk Anti-Cheat Suite', () => {
     expect(window.SecureKioskBridge.enableKioskMode).toHaveBeenCalled();
     expect(screen.getByText(/Explain Android LockTask Mode and FLAG_SECURE/i)).toBeInTheDocument();
     expect(screen.getByText(/SECURITY VIOLATIONS: 0/i)).toBeInTheDocument();
+    expect(document.querySelector('iframe')).toBeNull();
   });
 
   it('detects Android Screen Pinning breach, suspends paper view, and reports violation to backend', async () => {
@@ -213,12 +220,121 @@ describe('StudentTerminal Android & Kiosk Anti-Cheat Suite', () => {
 
     expect(screen.getByText(/Admin override/i)).toBeInTheDocument();
 
-    const pinInput = screen.getByPlaceholderText('***');
+    const pinInput = screen.getByPlaceholderText(/PIN|\*\*\*/i);
     fireEvent.change(pinInput, { target: { value: '999' } });
     fireEvent.click(screen.getByRole('button', { name: 'EXIT' }));
 
     await waitFor(() => {
       expect(window.SecureKioskBridge.exitKioskApp).toHaveBeenCalledWith('999');
+    });
+  });
+
+  it('renders ImagePaperViewer when paper has image pages', async () => {
+    const mockImagePages = [
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    ];
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url) => {
+        if (String(url).includes('/api/student/paper')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              status: 'success',
+              roll_number: '2026-CS-101',
+              seat_id: 'DESK-42',
+              subject_code: 'MATH-201',
+              center_code: 'CTR-101',
+              content: JSON.stringify({
+                text: 'Math exam questions',
+                pages: mockImagePages,
+              }),
+            }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      })
+    );
+
+    render(<StudentTerminal />);
+    const subjectInput = screen.getByPlaceholderText(/CS-602/i);
+    fireEvent.change(subjectInput, { target: { value: 'MATH-201' } });
+    fireEvent.click(screen.getByText(/START SECURE KIOSK READER/i));
+
+    await waitFor(() => {
+      expect(screen.getByText(/SECURE STUDENT KIOSK READER — ACTIVE/i)).toBeInTheDocument();
+    });
+
+    // ImagePaperViewer should be rendered with layout buttons
+    expect(screen.getByText(/Visual Document/i)).toBeInTheDocument();
+    expect(screen.getByText(/Text View/i)).toBeInTheDocument();
+    expect(document.querySelector('.image-paper-container')).toBeInTheDocument();
+    expect(document.querySelector('iframe')).toBeNull();
+
+    // Toggle to Text View
+    fireEvent.click(screen.getByText(/Text View/i));
+    expect(screen.getByText(/Math exam questions/i)).toBeInTheDocument();
+  });
+
+  it('renders single image dataUrl into ImagePaperViewer cleanly', async () => {
+    const singleImage = 'data:image/jpeg;base64,/9j/4AAQSkZJRg==';
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url) => {
+        if (String(url).includes('/api/student/paper')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              status: 'success',
+              roll_number: '2026-CS-101',
+              seat_id: 'DESK-42',
+              subject_code: 'PHY-101',
+              center_code: 'CTR-101',
+              content: JSON.stringify({
+                dataUrl: singleImage,
+                text: 'Physics paper questions',
+              }),
+            }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      })
+    );
+
+    render(<StudentTerminal />);
+    fireEvent.change(screen.getByPlaceholderText(/CS-602/i), { target: { value: 'PHY-101' } });
+    fireEvent.click(screen.getByText(/START SECURE KIOSK READER/i));
+
+    await waitFor(() => {
+      expect(screen.getByText(/SECURE STUDENT KIOSK READER — ACTIVE/i)).toBeInTheDocument();
+    });
+
+    expect(document.querySelector('.image-paper-container')).toBeInTheDocument();
+    expect(document.querySelector('iframe')).toBeNull();
+  });
+
+  it('handles emergency secret PIN dialog on Ctrl+A and accepts 999 or 9999', async () => {
+    render(<StudentTerminal />);
+
+    // Press Ctrl+A
+    fireEvent.keyDown(window, { key: 'a', ctrlKey: true });
+
+    await waitFor(() => {
+      expect(screen.getByText(/ADMIN OVERRIDE/i)).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/PIN|\*\*\*/i)).toBeInTheDocument();
+    });
+
+    // Test Show / Hide PIN toggle
+    const toggleBtn = screen.getByText(/SHOW/i);
+    fireEvent.click(toggleBtn);
+    expect(screen.getByText(/HIDE/i)).toBeInTheDocument();
+
+    // Close via ESC
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByText(/ADMIN OVERRIDE/i)).toBeNull();
     });
   });
 });

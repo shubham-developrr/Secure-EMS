@@ -165,6 +165,10 @@ def get_db_connection():
     dsn = os.getenv("DATABASE_URL") if testing else (os.getenv("SUPABASE_DATABASE_URL") or os.getenv("DATABASE_URL"))
 
     if dsn and dsn.startswith(("postgres://", "postgresql://")) and psycopg2 is not None:
-        return CloudDBConnection(dsn)
+        try:
+            return CloudDBConnection(dsn)
+        except Exception as e:
+            print(f"Notice: Failed to connect to PostgreSQL ({e}). Falling back to SQLite.")
+            return _get_sqlite_fallback_connection()
 
     return _get_sqlite_fallback_connection()

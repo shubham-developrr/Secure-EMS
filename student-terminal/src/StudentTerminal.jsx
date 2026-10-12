@@ -14,6 +14,11 @@ import {
 
 const RENDER_PRIMARY_URL = 'https://secure-ems-backend.onrender.com';
 const RENDER_FALLBACK_URL = 'https://secure-ems.onrender.com';
+const API_BASE =
+  import.meta.env.VITE_API_URL ||
+  (typeof window !== 'undefined' && window.location.protocol.startsWith('http') && import.meta.env.PROD
+    ? ''
+    : RENDER_PRIMARY_URL);
 
 const formatSecondsAsClock = (totalSeconds) => {
   const safe = Math.max(0, Number(totalSeconds) || 0);
@@ -31,19 +36,28 @@ const ensurePdfBlobUrl = (content) => {
     return trimmed;
   }
 
-  let base64Data = '';
+  // Never convert image data to a PDF blob URL
+  if (trimmed.startsWith('data:image/')) {
+    return '';
+  }
 
-  if (trimmed.includes('base64,')) {
-    base64Data = trimmed.split('base64,')[1];
-  } else if (trimmed.startsWith('data:image/')) {
-    return trimmed;
-  } else if (trimmed.startsWith('{')) {
+  if (trimmed.startsWith('{')) {
     try {
       const parsed = JSON.parse(trimmed);
-      if (parsed.dataUrl) return ensurePdfBlobUrl(parsed.dataUrl);
+      if (parsed.dataUrl && !parsed.dataUrl.startsWith('data:image/')) {
+        return ensurePdfBlobUrl(parsed.dataUrl);
+      }
     } catch {
       // Ignore
     }
+  }
+
+  let base64Data = '';
+
+  if (trimmed.startsWith('data:application/pdf;base64,')) {
+    base64Data = trimmed.split('base64,')[1];
+  } else if (trimmed.startsWith('data:application/pdf')) {
+    return trimmed;
   } else if (trimmed.startsWith('JVBERi')) {
     base64Data = trimmed;
   } else if (
@@ -89,6 +103,52 @@ const ensurePdfBlobUrl = (content) => {
   return '';
 };
 
+const renderPdfPages = async (pdfSource) => {
+  if (typeof window === 'undefined') return [];
+  const pdfjs = window.pdfjsLib;
+  if (!pdfjs) return [];
+
+  try {
+    if (!pdfjs.GlobalWorkerOptions.workerSrc) {
+      pdfjs.GlobalWorkerOptions.workerSrc = './pdf.worker.min.js';
+    }
+
+    let loadingTask;
+    if (typeof pdfSource === 'string' && (pdfSource.startsWith('data:application/pdf;base64,') || pdfSource.startsWith('JVBERi'))) {
+      const b64 = pdfSource.includes('base64,') ? pdfSource.split('base64,')[1] : pdfSource;
+      const cleanB64 = b64.replace(/\s/g, '');
+      const binaryStr = atob(cleanB64);
+      const len = binaryStr.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      loadingTask = pdfjs.getDocument({ data: bytes });
+    } else {
+      loadingTask = pdfjs.getDocument(pdfSource);
+    }
+
+    const pdfDoc = await loadingTask.promise;
+    const pageImages = [];
+
+    for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
+      const page = await pdfDoc.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 1.5 });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext('2d');
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      pageImages.push(canvas.toDataURL('image/png'));
+    }
+
+    return pageImages;
+  } catch (err) {
+    console.warn('PDF.js rendering could not extract canvas images:', err);
+    return [];
+  }
+};
+
 export default class StudentTerminal extends React.Component {
   constructor(props) {
     super(props);
@@ -110,13 +170,16 @@ export default class StudentTerminal extends React.Component {
       focusLostModal: false,
       pinBreachModal: false,
       displayBreachModal: false,
-      viewMode: 'pdf',
+      viewMode: 'document',
       kioskSubmitted: false,
       adminUnlockPin: '',
       secretExitModal: false,
       secretExitPin: '',
+      showSecretPin: false,
+      pdfRenderedPages: [],
+      pdfRendering: false,
       // Android & Mobile/Tablet Kiosk state
-      apiBaseUrl: RENDER_PRIMARY_URL,
+      apiBaseUrl: API_BASE,
       orientationMode: 'unspecified',
       kioskPlatform: detectedPlatform,
       kioskStatus: {
@@ -175,11 +238,19 @@ export default class StudentTerminal extends React.Component {
     try {
       const { ipcRenderer } = window.require('electron');
       ipcRenderer.on('secret-exit-trigger', () => {
-        this.setState({ secretExitModal: true, secretExitPin: '' });
+        this.setState({ secretExitModal: true, secretExitPin: '', showSecretPin: false }, () => {
+          setTimeout(() => {
+            if (this.secretPinInputRef) this.secretPinInputRef.focus();
+          }, 50);
+        });
       });
       this._ipcRenderer = ipcRenderer;
     } catch {
       // Not running in Electron, skip
+    }
+
+    if (this.state.studentUnlocked && this.state.studentPaperContent) {
+      this.triggerPdfRendering(this.state.studentPaperContent, this.state.studentSubjectCode);
     }
   }
 
@@ -396,6 +467,31 @@ export default class StudentTerminal extends React.Component {
     }
   };
 
+  triggerPdfRendering = async (content, subjectCode) => {
+    const details = this.getPaperDetails(content, subjectCode);
+    if (details.pages && details.pages.length > 0) {
+      this.setState({ pdfRenderedPages: details.pages, pdfRendering: false, viewMode: 'document' });
+      return;
+    }
+
+    const pdfSource = details.dataUrl;
+    if (pdfSource && (pdfSource.startsWith('blob:') || pdfSource.startsWith('data:application/pdf') || pdfSource.startsWith('JVBERi') || pdfSource.includes('%PDF'))) {
+      this.setState({ pdfRendering: true });
+      try {
+        const pages = await renderPdfPages(pdfSource);
+        if (pages && pages.length > 0) {
+          this.setState({ pdfRenderedPages: pages, pdfRendering: false, viewMode: 'document' });
+          return;
+        }
+      } catch (e) {
+        console.warn('PDF page extraction error', e);
+      }
+      this.setState({ pdfRendering: false, viewMode: 'text' });
+    } else {
+      this.setState({ pdfRendering: false, viewMode: 'text' });
+    }
+  };
+
   fetchStudentPhoto = async (roll) => {
     const cleanRoll = (roll || this.state.studentRoll || '').trim().toUpperCase();
     if (!cleanRoll) return;
@@ -581,11 +677,25 @@ export default class StudentTerminal extends React.Component {
     if (e.ctrlKey && e.key.toLowerCase() === 'a') {
       e.preventDefault();
       e.stopPropagation();
-      this.setState({ secretExitModal: true, secretExitPin: '' });
+      this.setState({ secretExitModal: true, secretExitPin: '', showSecretPin: false }, () => {
+        setTimeout(() => {
+          if (this.secretPinInputRef) this.secretPinInputRef.focus();
+        }, 50);
+      });
       return;
     }
 
-    if (this.state.studentUnlocked || this.state.secretExitModal) {
+    if (this.state.secretExitModal) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        this.setState({ secretExitModal: false, secretExitPin: '', showSecretPin: false });
+      }
+      // Allow all typing keys inside the secret exit modal
+      return;
+    }
+
+    if (this.state.studentUnlocked) {
       if (
         e.ctrlKey ||
         e.metaKey ||
@@ -692,12 +802,17 @@ export default class StudentTerminal extends React.Component {
           examRemainingSeconds: 3 * 3600,
         },
         () => {
+          this.triggerPdfRendering(data.content, studentSubjectCode);
           if (!data.captured_image_base64) {
             this.fetchStudentPhoto(studentRoll);
           }
           this.startHeartbeat();
         }
       );
+
+      if (typeof document !== 'undefined' && document.documentElement && document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
 
       await enableKioskLockdown({ orientation: orientationMode });
       this.refreshKioskSecurityStatus();
@@ -729,6 +844,10 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
           this.initialViewportHeight = window.innerHeight;
         }
 
+        if (typeof document !== 'undefined' && document.documentElement && document.documentElement.requestFullscreen) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        }
+
         this.setState(
           {
             studentPaperContent: fallbackText,
@@ -738,9 +857,12 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
             studentViolationsCount: 0,
             pinBreachModal: false,
             displayBreachModal: false,
+            studentSecurityAlert:
+              '⚠️ OFFLINE MODE: Backend server (https://secure-ems-backend.onrender.com) was unreachable. Using cached offline question paper.',
             examRemainingSeconds: 3 * 3600,
           },
           () => {
+            this.triggerPdfRendering(fallbackText, studentSubjectCode);
             this.startHeartbeat();
           }
         );
@@ -778,22 +900,44 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
 
   handleAdminUnlock = async (e) => {
     e.preventDefault();
-    if (this.state.adminUnlockPin === '9999') {
-      await disableKioskLockdown('9999').catch(() => {});
-      await exitKioskApplication('9999');
+    const pin = (this.state.adminUnlockPin || '').trim();
+    if (pin === '9999' || pin === '999') {
+      await disableKioskLockdown(pin).catch(() => {});
+      await exitKioskApplication(pin).catch(() => {});
+      try {
+        if (typeof window !== 'undefined' && window.require) {
+          const { ipcRenderer } = window.require('electron');
+          ipcRenderer.send('admin-quit');
+        }
+      } catch {
+        window.close();
+      }
     } else {
-      alert('Invalid Admin PIN');
+      alert('Invalid Admin PIN (Default: 9999 or 999)');
     }
   };
 
   handleSecretExit = async (e) => {
     e.preventDefault();
-    if (this.state.secretExitPin === '999' || this.state.secretExitPin === '9999') {
-      await disableKioskLockdown(this.state.secretExitPin).catch(() => {});
-      await exitKioskApplication(this.state.secretExitPin);
+    const pin = (this.state.secretExitPin || '').trim();
+    if (pin === '999' || pin === '9999') {
+      await disableKioskLockdown(pin).catch(() => {});
+      await exitKioskApplication(pin).catch(() => {});
+      try {
+        if (typeof window !== 'undefined' && window.require) {
+          const { ipcRenderer } = window.require('electron');
+          ipcRenderer.send('admin-quit');
+        }
+      } catch {
+        window.close();
+      }
     } else {
-      alert('Invalid Secret PIN');
-      this.setState({ secretExitPin: '' });
+      alert('Invalid Emergency PIN (Default: 999 or 9999)');
+      this.setState({ secretExitPin: '' }, () => {
+        setTimeout(() => {
+          if (this.secretPinInputRef) this.secretPinInputRef.focus();
+        }, 50);
+      });
     }
   };
 
@@ -807,7 +951,14 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
       if (trimmed.startsWith('{')) {
         try {
           const parsed = JSON.parse(trimmed);
-          if (parsed.dataUrl) dataUrl = ensurePdfBlobUrl(parsed.dataUrl) || parsed.dataUrl;
+          if (parsed.dataUrl) {
+            dataUrl = parsed.dataUrl;
+            if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')) {
+              if (!pages) pages = [dataUrl];
+            } else {
+              dataUrl = ensurePdfBlobUrl(parsed.dataUrl) || parsed.dataUrl;
+            }
+          }
           if (parsed.pages && Array.isArray(parsed.pages)) {
             pages = parsed.pages;
           }
@@ -816,6 +967,10 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
               try {
                 const innerParsed = JSON.parse(parsed.text.trim());
                 if (innerParsed.pages && Array.isArray(innerParsed.pages)) pages = innerParsed.pages;
+                if (innerParsed.dataUrl && typeof innerParsed.dataUrl === 'string' && innerParsed.dataUrl.startsWith('data:image/') && !pages) {
+                  pages = [innerParsed.dataUrl];
+                }
+                text = innerParsed.text || parsed.text;
               } catch {
                 text = parsed.text;
               }
@@ -829,8 +984,12 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
       }
 
       if (!dataUrl && (!pages || pages.length === 0)) {
-        dataUrl = ensurePdfBlobUrl(rawContent);
-        if (!dataUrl && !text) {
+        if (trimmed.startsWith('data:image/')) {
+          pages = [trimmed];
+          dataUrl = trimmed;
+        } else if (trimmed.startsWith('data:application/pdf') || trimmed.startsWith('JVBERi') || trimmed.includes('%PDF')) {
+          dataUrl = ensurePdfBlobUrl(rawContent) || trimmed;
+        } else if (!text) {
           text = rawContent;
         }
       }
@@ -838,7 +997,7 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
 
     if (!dataUrl && (!pages || pages.length === 0)) {
       try {
-        const customPapers = JSON.parse(localStorage.getItem('CUSTOM_PAPERS') || '{}');
+        const customPapers = this.loadAllCustomPapers();
         const code = (subjectCode || '').toUpperCase().trim();
 
         let paperObj = customPapers[code];
@@ -857,12 +1016,20 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
 
         if (paperObj && typeof paperObj === 'object') {
           if (paperObj.pages && Array.isArray(paperObj.pages)) pages = paperObj.pages;
-          if (paperObj.dataUrl) dataUrl = ensurePdfBlobUrl(paperObj.dataUrl) || paperObj.dataUrl;
+          if (paperObj.dataUrl) {
+            dataUrl = paperObj.dataUrl;
+            if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/') && (!pages || pages.length === 0)) {
+              pages = [dataUrl];
+            } else {
+              dataUrl = ensurePdfBlobUrl(paperObj.dataUrl) || paperObj.dataUrl;
+            }
+          }
           if (!text && paperObj.text) {
             if (typeof paperObj.text === 'string' && paperObj.text.trim().startsWith('{')) {
               try {
                 const p = JSON.parse(paperObj.text.trim());
                 if (p.pages && Array.isArray(p.pages)) pages = p.pages;
+                text = p.text || paperObj.text;
               } catch {
                 // Ignore
               }
@@ -871,26 +1038,37 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
             }
           }
         } else if (typeof paperObj === 'string') {
-          dataUrl = ensurePdfBlobUrl(paperObj);
-          if (!dataUrl && !text) text = paperObj;
+          if (paperObj.trim().startsWith('data:image/')) {
+            pages = [paperObj.trim()];
+            dataUrl = paperObj.trim();
+          } else {
+            dataUrl = ensurePdfBlobUrl(paperObj) || paperObj;
+            if (!dataUrl && !text) text = paperObj;
+          }
         }
       } catch {
         // Ignore
       }
     }
 
-    if (pages && pages.length > 0) {
-      text = '';
-    }
-
     return { dataUrl, text, pages };
   };
 
-  getCleanPaperContent = (rawContent) => {
-    if (!rawContent || typeof rawContent !== 'string') {
-      return '';
+  getCleanPaperContent = (rawContent, subjectCode) => {
+    const { text } = this.getPaperDetails(rawContent, subjectCode);
+    if (text && text.trim()) return text;
+    if (typeof rawContent === 'string' && rawContent.trim()) {
+      const trimmed = rawContent.trim();
+      if (trimmed.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed.text) return parsed.text;
+        } catch (e) {}
+      } else if (!trimmed.startsWith('data:') && !trimmed.startsWith('JVBERi') && !trimmed.includes('%PDF')) {
+        return trimmed;
+      }
     }
-    return rawContent;
+    return '';
   };
 
   getPaperDataUrl = (subjectCode) => {
@@ -898,16 +1076,45 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
     return dataUrl;
   };
 
+  loadAllCustomPapers = () => {
+    let customPapers = {};
+    try {
+      customPapers = JSON.parse(localStorage.getItem('CUSTOM_PAPERS') || '{}');
+    } catch (e) {}
+
+    try {
+      if (typeof window !== 'undefined' && window.require) {
+        const fs = window.require('fs');
+        const path = window.require('path');
+        const candidatePaths = [
+          path.join(process.cwd(), 'custom_papers.json'),
+          path.join(process.cwd(), '..', 'custom_papers.json'),
+          path.join(process.cwd(), 'backend', 'custom_papers.json'),
+          path.join(process.resourcesPath || '', 'custom_papers.json'),
+          path.join(process.resourcesPath || '', 'app', 'custom_papers.json')
+        ];
+        for (const p of candidatePaths) {
+          if (fs.existsSync(p)) {
+            const diskPapers = JSON.parse(fs.readFileSync(p, 'utf8'));
+            customPapers = { ...diskPapers, ...customPapers };
+            break;
+          }
+        }
+      }
+    } catch (e) {}
+    return customPapers;
+  };
+
   getFallbackPaperText = (subjectCode) => {
     const code = (subjectCode || '').toUpperCase().trim();
     try {
-      const customPapers = JSON.parse(localStorage.getItem('CUSTOM_PAPERS') || '{}');
+      const customPapers = this.loadAllCustomPapers();
       const paperObj = customPapers[code];
       if (paperObj) {
-        return typeof paperObj === 'string' ? paperObj : paperObj.text || '';
+        return typeof paperObj === 'string' ? paperObj : paperObj.text || (paperObj.pages ? JSON.stringify(paperObj) : '');
       }
     } catch (e) {
-      console.error('Failed to read CUSTOM_PAPERS from localStorage', e);
+      console.error('Failed to resolve custom papers', e);
     }
     return '';
   };
@@ -1067,10 +1274,12 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                     <input
                       type="password"
                       inputMode="numeric"
+                      autoComplete="off"
                       value={adminUnlockPin}
                       onChange={(e) => this.setState({ adminUnlockPin: e.target.value })}
-                      className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-slate-100 font-bold focus:outline-none focus:border-red-500 text-center tracking-widest"
-                      placeholder="****"
+                      style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+                      className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-slate-100 font-bold focus:outline-none focus:border-red-500 text-center tracking-widest text-lg"
+                      placeholder="Enter PIN (9999)"
                       required
                     />
                   </div>
@@ -1456,144 +1665,173 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
                   </div>
                 )}
 
-                <div className="bg-slate-950 border border-slate-800 rounded-t-lg px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs font-mono select-none">
-                  <div className="flex items-center gap-2">
-                    <span className="bg-amber-600 text-white font-bold px-2 py-0.5 rounded text-[10px] tracking-wider uppercase">
-                      🖼️ IMAGE DOCUMENT
-                    </span>
-                    <span className="text-slate-200 font-bold truncate max-w-[200px] sm:max-w-none">
-                      {studentSubjectCode}_Question_Paper_2026
-                    </span>
-                  </div>
+                {/* PDF Document Viewer / Question Paper Toolbar & Sheet Layout */}
+                {(() => {
+                  const { text: activePaperText, pages: directPages, dataUrl: pdfDataUrl } = this.getPaperDetails(studentPaperContent, studentSubjectCode);
+                  const activePages = (directPages && directPages.length > 0) ? directPages : this.state.pdfRenderedPages;
+                  const displayContent = activePaperText || this.getCleanPaperContent(studentPaperContent, studentSubjectCode);
+                  const hasPages = Boolean(activePages && activePages.length > 0);
+                  const hasPdf = Boolean(pdfDataUrl);
+                  const showDocumentView = (hasPages || hasPdf) && this.state.viewMode === 'document';
 
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          this.setState((prev) => ({
-                            textFontScale: Math.max(80, prev.textFontScale - 10),
-                          }))
-                        }
-                        className="px-1.5 text-slate-300 hover:text-white font-bold"
-                        title="Decrease Text Size"
-                      >
-                        A-
-                      </button>
-                      <span className="text-[10px] text-slate-400">{textFontScale}%</span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          this.setState((prev) => ({
-                            textFontScale: Math.min(150, prev.textFontScale + 10),
-                          }))
-                        }
-                        className="px-1.5 text-slate-300 hover:text-white font-bold"
-                        title="Increase Text Size"
-                      >
-                        A+
-                      </button>
-                    </div>
-                    <span className="bg-slate-900 border border-slate-800 text-emerald-400 px-2.5 py-1 rounded text-[10px] font-bold">
-                      🔒 READ-ONLY KIOSK LOCK
-                    </span>
-                  </div>
-                </div>
-
-                {/* Official Permanent PDF / Image / Text Document Sheet Layout */}
-                <div
-                  className="relative bg-slate-950 p-3 sm:p-6 rounded-b-lg border-2 border-slate-800 max-h-[75vh] overflow-y-auto shadow-2xl select-none"
-                  onContextMenu={this.preventStudentContextMenu}
-                  onCopy={this.preventStudentClipboard}
-                  onCut={this.preventStudentClipboard}
-                  onPaste={this.preventStudentClipboard}
-                  style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
-                >
-                  {/* Dynamic Forensic Anti-Camera Watermark Overlay */}
-                  <div
-                    aria-hidden="true"
-                    className="pointer-events-none absolute inset-0 z-30 flex flex-col justify-around items-center overflow-hidden opacity-10 select-none"
-                  >
-                    <span className="text-emerald-300 font-mono font-extrabold text-xs sm:text-base tracking-widest uppercase -rotate-12 whitespace-nowrap">
-                      {forensicWatermark}
-                    </span>
-                    <span className="text-amber-300 font-mono font-extrabold text-xs sm:text-base tracking-widest uppercase -rotate-12 whitespace-nowrap">
-                      {forensicWatermark}
-                    </span>
-                  </div>
-
-                  {/* Exact Uploaded PDF Document Stream, Image Pages, or Clean Question Paper Payload */}
-                  {(() => {
-                    const {
-                      text: activePaperText,
-                      pages: activePages,
-                      dataUrl: pdfDataUrl,
-                    } = this.getPaperDetails(studentPaperContent, studentSubjectCode);
-                    const displayContent =
-                      activePaperText ||
-                      this.getCleanPaperContent(studentPaperContent, studentSubjectCode);
-
-                    if (activePages && activePages.length > 0) {
-                      return (
-                        <div className="w-full relative z-20">
-                          <ImagePaperViewer
-                            pages={activePages}
-                            subjectCode={studentSubjectCode}
-                            title={`Official Question Paper (${studentSubjectCode})`}
-                          />
-                        </div>
-                      );
-                    }
-
-                    if (pdfDataUrl) {
-                      return (
-                        <PdfCanvasViewer
-                          pdfUrl={pdfDataUrl}
-                          subjectCode={studentSubjectCode}
-                          seatId={studentSeat}
-                          rollNumber={studentRoll}
-                          centerCode={studentCenterCode}
-                        />
-                      );
-                    }
-
-                    return (
-                      <div className="bg-slate-900/90 text-slate-100 p-4 sm:p-8 rounded-xl shadow-2xl border border-slate-800 max-w-4xl mx-auto font-sans relative z-20 space-y-6">
-                        {/* Header Badge */}
-                        <div className="border-b border-slate-800 pb-4 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
-                          <div className="flex items-center gap-2">
-                            <span className="bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2.5 py-1 rounded font-bold uppercase tracking-wider">
-                              📄 OFFICIAL QUESTION PAPER ({studentSubjectCode})
+                  return (
+                    <>
+                      <div className="bg-slate-950 border border-slate-800 rounded-t-lg px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs font-mono select-none">
+                        <div className="flex items-center gap-2">
+                          <span className="bg-amber-600 text-white font-bold px-2 py-0.5 rounded text-[10px] tracking-wider uppercase">
+                            {hasPages ? '📄 DOCUMENT VIEW' : hasPdf ? '📄 PDF VIEW' : '📝 STRUCTURED PAPER'}
+                          </span>
+                          <span className="text-slate-200 font-bold truncate max-w-[200px] sm:max-w-none">
+                            {studentSubjectCode}_Question_Paper_2026
+                          </span>
+                          {this.state.pdfRendering && (
+                            <span className="text-[10px] text-amber-400 animate-pulse bg-amber-950/80 border border-amber-800 px-2 py-0.5 rounded">
+                              Rendering High-Res Pages...
                             </span>
-                            <span className="text-slate-400">| Seat: {studentSeat}</span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {(hasPages || hasPdf) && (
+                            <div className="flex bg-slate-900 border border-slate-800 rounded p-0.5 text-[10px]">
+                              <button
+                                type="button"
+                                onClick={() => this.setState({ viewMode: 'document' })}
+                                className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                                  this.state.viewMode === 'document'
+                                    ? 'bg-amber-600 text-slate-950'
+                                    : 'text-slate-400 hover:text-white'
+                                }`}
+                              >
+                                📄 Visual Document
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => this.setState({ viewMode: 'text' })}
+                                className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                                  this.state.viewMode === 'text'
+                                    ? 'bg-amber-600 text-slate-950'
+                                    : 'text-slate-400 hover:text-white'
+                                }`}
+                              >
+                                📝 Text View
+                              </button>
+                            </div>
+                          )}
+
+                          <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                this.setState((prev) => ({
+                                  textFontScale: Math.max(80, prev.textFontScale - 10),
+                                }))
+                              }
+                              className="px-1.5 text-slate-300 hover:text-white font-bold"
+                              title="Decrease Text Size"
+                            >
+                              A-
+                            </button>
+                            <span className="text-[10px] text-slate-400">{textFontScale}%</span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                this.setState((prev) => ({
+                                  textFontScale: Math.min(150, prev.textFontScale + 10),
+                                }))
+                              }
+                              className="px-1.5 text-slate-300 hover:text-white font-bold"
+                              title="Increase Text Size"
+                            >
+                              A+
+                            </button>
                           </div>
-                          <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2.5 py-0.5 rounded font-bold uppercase text-[10px]">
-                            ● DECRYPTED &amp; VERIFIED
+
+                          <span className="bg-slate-900 border border-slate-800 text-emerald-400 px-2.5 py-1 rounded text-[10px] font-bold">
+                            🔒 READ-ONLY KIOSK LOCK
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Official Permanent PDF / Image / Text Document Sheet Layout */}
+                      <div
+                        className="relative bg-slate-950 p-3 sm:p-6 rounded-b-lg border-2 border-slate-800 max-h-[75vh] overflow-y-auto shadow-2xl select-none"
+                        onContextMenu={this.preventStudentContextMenu}
+                        onCopy={this.preventStudentClipboard}
+                        onCut={this.preventStudentClipboard}
+                        onPaste={this.preventStudentClipboard}
+                        style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+                      >
+                        {/* Dynamic Forensic Anti-Camera Watermark Overlay */}
+                        <div
+                          aria-hidden="true"
+                          className="pointer-events-none absolute inset-0 z-30 flex flex-col justify-around items-center overflow-hidden opacity-10 select-none"
+                        >
+                          <span className="text-emerald-300 font-mono font-extrabold text-xs sm:text-base tracking-widest uppercase -rotate-12 whitespace-nowrap">
+                            {forensicWatermark}
+                          </span>
+                          <span className="text-amber-300 font-mono font-extrabold text-xs sm:text-base tracking-widest uppercase -rotate-12 whitespace-nowrap">
+                            {forensicWatermark}
                           </span>
                         </div>
 
-                        {/* Question Content Display */}
-                        <div className="space-y-4 pt-2">
-                          <div className="text-xs font-mono font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1">
-                            SECTION A — EXAMINATION QUESTIONS &amp; INSTRUCTIONS
-                          </div>
-                          <div
-                            className="bg-slate-950 p-4 sm:p-5 rounded-lg border border-slate-800 font-mono text-sm leading-relaxed text-slate-200 whitespace-pre-wrap shadow-inner"
-                            style={{ fontSize: `${textFontScale}%` }}
-                          >
-                            {displayContent || 'No question paper payload loaded.'}
-                          </div>
-                        </div>
+                        {showDocumentView ? (
+                          hasPages ? (
+                            <div className="w-full relative z-20">
+                              <ImagePaperViewer
+                                pages={activePages}
+                                subjectCode={studentSubjectCode}
+                                title={`Official Question Paper (${studentSubjectCode})`}
+                              />
+                            </div>
+                          ) : pdfDataUrl ? (
+                            <PdfCanvasViewer
+                              pdfUrl={pdfDataUrl}
+                              subjectCode={studentSubjectCode}
+                              seatId={studentSeat}
+                              rollNumber={studentRoll}
+                              centerCode={studentCenterCode}
+                            />
+                          ) : null
+                        ) : (
+                          <div className="bg-slate-900/90 text-slate-100 p-4 sm:p-8 rounded-xl shadow-2xl border border-slate-800 max-w-4xl mx-auto font-sans relative z-20 space-y-6">
+                            {/* Header Badge */}
+                            <div className="border-b border-slate-800 pb-4 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+                              <div className="flex items-center gap-2">
+                                <span className="bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2.5 py-1 rounded font-bold uppercase tracking-wider">
+                                  📄 OFFICIAL QUESTION PAPER ({studentSubjectCode})
+                                </span>
+                                <span className="text-slate-400">| Seat: {studentSeat}</span>
+                              </div>
+                              <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2.5 py-0.5 rounded font-bold uppercase text-[10px]">
+                                ● DECRYPTED &amp; VERIFIED
+                              </span>
+                            </div>
 
-                        {/* Document Footer */}
-                        <div className="border-t border-slate-800 pt-4 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-500">
-                          <span>END OF QUESTION PAPER PAYLOAD</span>
-                          <span>SECURITY TIME-LOCKED 🔒</span>
-                        </div>
+                            {/* Question Content Display */}
+                            <div className="space-y-4 pt-2">
+                              <div className="text-xs font-mono font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800 pb-1">
+                                SECTION A — EXAMINATION QUESTIONS &amp; INSTRUCTIONS
+                              </div>
+                              <div
+                                className="bg-slate-950 p-4 sm:p-5 rounded-lg border border-slate-800 font-mono text-sm leading-relaxed text-slate-200 whitespace-pre-wrap shadow-inner"
+                                style={{ fontSize: `${textFontScale}%` }}
+                              >
+                                {displayContent || (this.state.pdfRendering ? 'Rendering question paper document...' : 'No question paper payload loaded.')}
+                              </div>
+                            </div>
+
+                            {/* Document Footer */}
+                            <div className="border-t border-slate-800 pt-4 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-500">
+                              <span>END OF QUESTION PAPER PAYLOAD</span>
+                              <span>SECURITY TIME-LOCKED 🔒</span>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    );
-                  })()}
-                </div>
+                    </>
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -1681,35 +1919,60 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
 
         {/* Secret Exit Dialog (Ctrl+A or 5 Rapid Taps on Header Status Badge) */}
         {this.state.secretExitModal && (
-          <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div
+            className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[9999] flex items-center justify-center p-4"
+            style={{ userSelect: 'auto', WebkitUserSelect: 'auto' }}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                this.setState({ secretExitModal: false, secretExitPin: '', showSecretPin: false });
+              }
+            }}
+          >
             <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 max-w-sm w-full shadow-2xl">
-              <h3 className="text-lg font-bold text-slate-200 mb-2 text-center uppercase tracking-widest">
+              <h3 className="text-lg font-bold text-slate-200 mb-1 text-center uppercase tracking-widest">
                 Admin override
               </h3>
               <p className="text-xs text-slate-400 font-mono text-center mb-4">
                 Enter Proctor / Administrator PIN to unpin Android LockTask and exit kiosk
               </p>
               <form onSubmit={this.handleSecretExit} className="space-y-4">
-                <input
-                  type="password"
-                  inputMode="numeric"
-                  value={this.state.secretExitPin}
-                  onChange={(e) => this.setState({ secretExitPin: e.target.value })}
-                  className="w-full bg-slate-950 border-b-2 border-slate-700 focus:border-amber-500 text-center text-2xl tracking-widest text-white px-4 py-2 outline-none rounded-t"
-                  placeholder="***"
-                  autoFocus
-                />
+                <div className="relative">
+                  <input
+                    ref={(el) => {
+                      this.secretPinInputRef = el;
+                    }}
+                    type={this.state.showSecretPin ? 'text' : 'password'}
+                    inputMode="numeric"
+                    autoComplete="off"
+                    value={this.state.secretExitPin}
+                    onChange={(e) => this.setState({ secretExitPin: e.target.value })}
+                    style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+                    className="w-full bg-slate-950 border-b-2 border-slate-700 focus:border-amber-500 text-center text-2xl tracking-widest text-white px-8 py-2 outline-none rounded-t font-mono"
+                    placeholder="PIN"
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={() => this.setState((prev) => ({ showSecretPin: !prev.showSecretPin }))}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 hover:text-slate-200 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700"
+                  >
+                    {this.state.showSecretPin ? 'HIDE' : 'SHOW'}
+                  </button>
+                </div>
+                <div className="text-[11px] text-slate-400 text-center font-mono">
+                  Default PIN: 999 or 9999
+                </div>
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    onClick={() => this.setState({ secretExitModal: false, secretExitPin: '' })}
-                    className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2 rounded"
+                    onClick={() => this.setState({ secretExitModal: false, secretExitPin: '', showSecretPin: false })}
+                    className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2 rounded text-sm"
                   >
                     CANCEL
                   </button>
                   <button
                     type="submit"
-                    className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold py-2 rounded"
+                    className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold py-2 rounded text-sm"
                   >
                     EXIT
                   </button>

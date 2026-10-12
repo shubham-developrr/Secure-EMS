@@ -1,6 +1,5 @@
-const { app, BrowserWindow, ipcMain, Menu, protocol, net, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, globalShortcut } = require('electron');
 const path = require('path');
-const url = require('url');
 
 let mainWindow;
 
@@ -13,6 +12,8 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
+      webSecurity: false,
+      plugins: true,
     },
   });
 
@@ -25,31 +26,30 @@ function createWindow() {
     }
   });
 
+  const indexPath = path.join(__dirname, 'dist', 'index.html');
   if (app.isPackaged) {
-    mainWindow.loadURL('app://index.html');
+    mainWindow.loadFile(indexPath);
   } else {
-    mainWindow.loadURL('app://index.html');
+    mainWindow.loadFile(indexPath).catch(() => {
+      mainWindow.loadURL('http://localhost:5173');
+    });
   }
+
+  // Log load failures if any
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    console.error(`Failed to load ${validatedURL}: [${errorCode}] ${errorDescription}`);
+  });
 }
 
 app.whenReady().then(() => {
-  protocol.handle('app', (request) => {
-    let requestUrl = request.url.slice('app://'.length);
-    // If it's exactly app:// or app://index.html
-    if (requestUrl === '' || requestUrl === '/' || requestUrl === 'index.html') {
-      return net.fetch(url.pathToFileURL(path.join(__dirname, 'dist', 'index.html')).toString());
-    }
-    // Remove leading slash if any
-    if (requestUrl.startsWith('/')) requestUrl = requestUrl.slice(1);
-    return net.fetch(url.pathToFileURL(path.join(__dirname, 'dist', requestUrl)).toString());
-  });
-
   createWindow();
 
   // Register global shortcut for secret admin exit (Ctrl+A)
   // This fires even in kiosk mode and sends IPC to the renderer
   globalShortcut.register('CommandOrControl+A', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.focus();
+      mainWindow.webContents.focus();
       mainWindow.webContents.send('secret-exit-trigger');
     }
   });
