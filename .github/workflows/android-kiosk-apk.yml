@@ -1,0 +1,87 @@
+name: Build Android Student Kiosk APK
+
+on:
+  push:
+    branches: [ main, master, "arena/**" ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android-kiosk-apk:
+    name: Compile Android Student Kiosk APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Accept Android SDK Licenses
+        run: |
+          echo "ANDROID_HOME is $ANDROID_HOME"
+          if [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          fi
+
+      - name: Install Student Terminal Dependencies & Sync Capacitor Android
+        working-directory: ./student-terminal
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: |
+          npm install
+          npm run cap:sync
+
+      - name: Run Student Terminal Unit Tests
+        working-directory: ./student-terminal
+        run: npm test -- --run
+
+      - name: Build Android Kiosk Debug APK via Gradle
+        id: gradle_build
+        working-directory: ./student-terminal/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../gradle-build.log
+          cp app/build/outputs/apk/debug/app-debug.apk ../Secure-EMS-Student-Kiosk.apk
+          ls -lh ../Secure-EMS-Student-Kiosk.apk
+
+      - name: Commit Compiled APK to Branch
+        if: always() && github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -f student-terminal/Secure-EMS-Student-Kiosk.apk ]; then
+            rm -f student-terminal/gradle-build.log
+            git add -f student-terminal/Secure-EMS-Student-Kiosk.apk
+            git commit -m "chore(android): attach compiled Secure-EMS-Student-Kiosk.apk [skip ci]" || true
+            git push origin HEAD:${GITHUB_REF_NAME}
+          elif [ -f student-terminal/gradle-build.log ]; then
+            tail -n 250 student-terminal/gradle-build.log > student-terminal/gradle-error.log
+            rm -f student-terminal/gradle-build.log
+            git add -f student-terminal/gradle-error.log
+            git commit -m "chore(android): attach gradle error log [skip ci]" || true
+            git push origin HEAD:${GITHUB_REF_NAME}
+            exit 1
+          fi
+
+      - name: Upload Android Student Kiosk APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Secure-EMS-Student-Kiosk-APK
+          path: student-terminal/Secure-EMS-Student-Kiosk.apk
+          retention-days: 30
