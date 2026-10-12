@@ -995,6 +995,16 @@ Q3. Outline the biometric candidate verification workflow prior to hall entry.
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
+              {this.state.kioskPlatform === 'web' && !studentUnlocked && (
+                <a
+                  href={`${this.getActiveApiBase()}/api/student/download-apk`}
+                  download="Secure-EMS-Student-Kiosk.apk"
+                  className="bg-emerald-800/80 hover:bg-emerald-700 text-emerald-100 border border-emerald-500/70 px-2.5 py-1 rounded text-[11px] font-mono font-bold transition-colors flex items-center gap-1 shadow"
+                  title="Download compiled Android Kiosk APK (Secure-EMS-Student-Kiosk.apk)"
+                >
+                  📲 Download Android APK
+                </a>
+              )}
               <span
                 className="bg-slate-900 px-2.5 py-1 rounded border border-slate-800 text-[11px] font-mono text-cyan-300"
                 title="Active Anti-Screenshot & Screen-Recording Shield"

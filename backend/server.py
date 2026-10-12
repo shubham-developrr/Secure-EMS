@@ -1568,6 +1568,27 @@ def publish_paper_to_students(payload: PublishPaperRequest, request: Request):
     }
 
 
+@app.get("/api/student/download-apk")
+def download_student_kiosk_apk():
+    from fastapi.responses import FileResponse
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    apk_candidates = [
+        os.path.join(repo_root, "student-terminal", "Secure-EMS-Student-Kiosk.apk"),
+        os.path.join(repo_root, "Secure-EMS-Student-Kiosk.apk"),
+        os.path.join(repo_root, "student-terminal", "android", "app", "build", "outputs", "apk", "debug", "app-debug.apk"),
+    ]
+    for apk_path in apk_candidates:
+        if os.path.exists(apk_path):
+            return FileResponse(
+                path=apk_path,
+                media_type="application/vnd.android.package-archive",
+                filename="Secure-EMS-Student-Kiosk.apk",
+            )
+    raise HTTPException(
+        status_code=404,
+        detail="Compiled Secure-EMS-Student-Kiosk.apk not found on server.",
+    )
+
 
 if __name__ == "__main__":
     try:
