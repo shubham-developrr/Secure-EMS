@@ -95,7 +95,7 @@ class RowFactory:
 Row = RowFactory()
 
 def connect(database, timeout=5.0):
-    dsn = os.environ.get('DATABASE_URL')
+    dsn = os.environ.get('DATABASE_URL') or os.environ.get('SUPABASE_DATABASE_URL')
     if not dsn:
         raise Exception('DATABASE_URL not found in environment.')
     dsn = dsn.strip()
