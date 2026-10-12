@@ -53,6 +53,9 @@ def is_valid_decrypted_content(text: str) -> bool:
                 return True
         except Exception:
             pass
+    # Allow raw data URLs (image or PDF data URLs)
+    if stripped.startswith('data:'):
+        return True
     # Allow plain readable text
     return is_readable_text(text)
 
@@ -488,6 +491,33 @@ def upload_question_paper(payload: PaperUploadRequest, request: Request):
         ip_address=client_ip,
         anchor_to_blockchain=True
     )
+
+    # 6. Update local custom_papers.json cache for offline kiosk resilience
+    try:
+        import json
+        cache_paths = [
+            "custom_papers.json",
+            os.path.join(os.path.dirname(__file__), "..", "custom_papers.json")
+        ]
+        for cp in cache_paths:
+            existing = {}
+            if os.path.exists(cp):
+                try:
+                    with open(cp, "r", encoding="utf-8") as f:
+                        existing = json.load(f)
+                except Exception:
+                    existing = {}
+            existing[clean_subject] = {
+                "text": payload.paper_text,
+                "subjectCode": clean_subject
+            }
+            try:
+                with open(cp, "w", encoding="utf-8") as f:
+                    json.dump(existing, f)
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"Notice: local cache update failed: {e}")
 
     return {
         "status": "success",
@@ -1246,6 +1276,8 @@ def get_personnel_status():
         "admins": admin_personnel,
         "supervisors": supervisor_personnel
     }
+
+get_dashboard_personnel_status = get_personnel_status
 
 @app.post("/api/register-center")
 def register_exam_center(payload: ExamCenterRegistrationRequest, request: Request):

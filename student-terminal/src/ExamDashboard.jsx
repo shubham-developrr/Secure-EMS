@@ -2,7 +2,7 @@ import React from 'react';
 import VerificationTerminal from './VerificationTerminal.jsx';
 import ImagePaperViewer from './ImagePaperViewer.jsx';
 
-const API_BASE = import.meta.env.PROD ? '' : 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' && window.location.protocol.startsWith('http') && import.meta.env.PROD ? '' : 'https://secure-ems-backend.onrender.com');
 
 const ensurePdfBlobUrl = (content) => {
   if (!content || typeof content !== 'string') return '';
